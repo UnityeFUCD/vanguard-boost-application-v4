@@ -462,12 +462,12 @@
       name="applicationForm"
       method="POST"
       data-netlify="true"
-      enctype="multipart/form-data"
-      action="/thank-you.html"
+      netlify-honeypot="bot-field"
+      action="/success"
     >
       <!-- Hidden fields for Netlify -->
       <input type="hidden" name="form-name" value="applicationForm" />
-      <input type="hidden" name="redirect" value="/thank-you.html" />
+      <input type="hidden" name="bot-field" />
       <!-- Hidden Application ID -->
       <input type="hidden" name="applicationId" id="applicationId" value="">
       <!-- Page 1 -->
@@ -892,19 +892,21 @@
       const fileList = document.getElementById("fileList");
       const MAX_FILES = 2;
       let uploadedFiles = [];
-      fileInput.addEventListener("change", function () {
-        if (this.files.length > 0) {
-          if (uploadedFiles.length >= MAX_FILES) {
-            alert("Maximum of " + MAX_FILES + " files allowed");
-            return;
+      if (fileInput) {
+        fileInput.addEventListener("change", function () {
+          if (this.files.length > 0) {
+            if (uploadedFiles.length >= MAX_FILES) {
+              alert("Maximum of " + MAX_FILES + " files allowed");
+              return;
+            }
+            const file = this.files[0];
+            const fileObj = { id: Date.now(), name: file.name, file: file };
+            uploadedFiles.push(fileObj);
+            updateFileListUI();
+            this.value = "";
           }
-          const file = this.files[0];
-          const fileObj = { id: Date.now(), name: file.name, file: file };
-          uploadedFiles.push(fileObj);
-          updateFileListUI();
-          this.value = "";
-        }
-      });
+        });
+      }
       function updateFileListUI() {
         fileList.innerHTML = "";
         uploadedFiles.forEach(function (fileObj) {
@@ -1024,36 +1026,34 @@
       // Combined submit handler: update IDs, validate page 2, check captcha, and submit
       if (applicationForm) {
         applicationForm.addEventListener("submit", function (e) {
-          // Update the applicationId field and redirect URL with the unique ID
-          document.getElementById("applicationId").value = applicationId;
-          const redirectField = document.querySelector('input[name="redirect"]');
-          if (redirectField) {
-            // Use absolute path with leading slash
-            redirectField.value = "/thank-you.html?applicationId=" + applicationId;
-          }
           // Store nickname in sessionStorage for later verification
           const nickname = document.getElementById("nickname").value;
           if (nickname) {
             sessionStorage.setItem("applicationNickname", nickname);
             sessionStorage.setItem("applicationId", applicationId);
+            console.log("Storing nickname in sessionStorage:", nickname);
           }
           
-          e.preventDefault();
           if (!validatePage(page2)) {
+            e.preventDefault();
             alert("Please fill in all required fields before submitting.");
             const firstErrorField = page2.querySelector(".error");
             if (firstErrorField) {
               firstErrorField.scrollIntoView({ behavior: "smooth", block: "center" });
             }
-            return;
+            return false;
           }
+          
           const captchaResponse = document.querySelector('[name="g-recaptcha-response"]');
           if (!captchaResponse || captchaResponse.value.trim() === "") {
+            e.preventDefault();
             alert("Please complete the captcha.");
-            return;
+            return false;
           }
-          alert("Application submitted successfully!");
-          applicationForm.submit();
+          
+          // Let Netlify handle the form submission - don't preventDefault
+          console.log("Form submission validated and proceeding");
+          return true;
         });
       }
       

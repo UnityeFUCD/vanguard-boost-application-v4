@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Form</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 20px auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    
+    form {
+      border: 1px solid #ddd;
+      padding: 20px;
+      border-radius: 5px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    
+    input, textarea {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 15px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    
+    button {
+      background: #4CAF50;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background: #45a049;
+    }
+    
+    .explanation {
+      background: #f8f8f8;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="explanation">
+    <h2>Test Form for Netlify Form Submission</h2>
+    <p>This is a simple test form to debug Netlify form submission issues.</p>
+    <p>After submitting this form, you should be redirected to the thank-you.html page.</p>
+  </div>
+
+  <form name="test-form" method="POST" data-netlify="true" action="/success">
+    <input type="hidden" name="form-name" value="test-form" />
+    
+    <div>
+      <label for="name">Name:</label>
+      <input type="text" id="name" name="name" required />
+    </div>
+    
+    <div>
+      <label for="email">Email:</label>
+      <input type="email" id="email" name="email" required />
+    </div>
+    
+    <div>
+      <label for="message">Message:</label>
+      <textarea id="message" name="message" rows="4" required></textarea>
+    </div>
+    
+    <button type="submit">Submit Test Form</button>
+  </form>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const form = document.querySelector('form[name="test-form"]');
+      
+      if (form) {
+        form.addEventListener('submit', function(e) {
+          // Store a test value in sessionStorage
+          sessionStorage.setItem('testFormSubmitted', 'true');
+          console.log('Test form submitted');
+          
+          // Let the form submit normally
+          return true;
+        });
+      }
+    });
+  </script>
+</body>
+</html>

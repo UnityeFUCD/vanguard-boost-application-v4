@@ -2,6 +2,12 @@
   publish = "."
   command = "npm run build"
 
+# Form success handling
+[[redirects]]
+  from = "/success"
+  to = "/thank-you.html"
+  status = 200
+
 # Allow thank-you.html to be accessed directly
 [[redirects]]
   from = "/thank-you.html"
@@ -14,21 +20,9 @@
   to = "/index.html"
   status = 200
   force = false
-  
-# Redirect for form submission handling
-[[redirects]]
-  from = "/submit-form"
-  to = "/.netlify/functions/submit-form"
-  status = 200
-  force = true
 
-# Handle Bungie callback
-[[redirects]]
-  from = "/callback"
-  to = "/.netlify/functions/callback"
-  status = 200
-  force = true
-
-# Handle form data processing
-[functions]
-  directory = "functions"
+# Process form submissions
+[build.processing]
+  skip_processing = false
+[build.processing.html]
+  pretty_urls = true

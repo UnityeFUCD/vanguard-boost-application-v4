@@ -1028,12 +1028,8 @@
           document.getElementById("applicationId").value = applicationId;
           const redirectField = document.querySelector('input[name="redirect"]');
           if (redirectField) {
-            const redirectUrl = redirectField.value;
-            if (redirectUrl.includes('?')) {
-              redirectField.value = redirectUrl + '&applicationId=' + applicationId;
-            } else {
-              redirectField.value = redirectUrl + '?applicationId=' + applicationId;
-            }
+            // Use absolute path with leading slash
+            redirectField.value = "/thank-you.html?applicationId=" + applicationId;
           }
           // Store nickname in sessionStorage for later verification
           const nickname = document.getElementById("nickname").value;

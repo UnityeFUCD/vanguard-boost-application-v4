@@ -16,8 +16,19 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
 // Airtable setup
-const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
-const table = base(process.env.AIRTABLE_TABLE_NAME);
+let base;
+let table;
+try {
+  if (process.env.AIRTABLE_API_KEY && process.env.AIRTABLE_BASE_ID && process.env.AIRTABLE_TABLE_NAME) {
+    base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
+    table = base(process.env.AIRTABLE_TABLE_NAME);
+    console.log('Airtable configured successfully');
+  } else {
+    console.log('Missing Airtable environment variables, Airtable integration disabled');
+  }
+} catch (error) {
+  console.error('Error configuring Airtable:', error);
+}
 
 // Bungie API credentials from environment variables
 const { BUNGIE_CLIENT_ID, BUNGIE_CLIENT_SECRET, BUNGIE_API_KEY, REDIRECT_URI } = process.env;
@@ -37,7 +48,7 @@ app.post('/submit-form', (req, res) => {
   console.log('Form submitted:', req.body);
   
   // Store form data in Airtable if API key is configured
-  if (process.env.AIRTABLE_API_KEY) {
+  if (table) {
     try {
       table.create({
         nickname: req.body.nickname,
@@ -56,7 +67,7 @@ app.post('/submit-form', (req, res) => {
     }
   }
   
-  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId));
+  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId || ''));
 });
 
 // OAuth callback route
@@ -183,22 +194,24 @@ app.get('/callback', async (req, res) => {
       console.log('Username verified successfully!');
 
       // Update Airtable record (if found)
-      try {
-        const records = await table.select({
-          filterByFormula: `{nickname} = '${userNickname}'`
-        }).firstPage();
+      if (table) {
+        try {
+          const records = await table.select({
+            filterByFormula: `{nickname} = '${userNickname}'`
+          }).firstPage();
 
-        if (records.length > 0) {
-          await table.update(records[0].id, {
-            verified: true,
-            bungieUsername: fullBungieName
-          });
-          console.log('Airtable record updated successfully.');
-        } else {
-          console.warn('No matching Airtable record found for nickname:', userNickname);
+          if (records.length > 0) {
+            await table.update(records[0].id, {
+              verified: true,
+              bungieUsername: fullBungieName
+            });
+            console.log('Airtable record updated successfully.');
+          } else {
+            console.warn('No matching Airtable record found for nickname:', userNickname);
+          }
+        } catch (atError) {
+          console.error('Error updating Airtable:', atError);
         }
-      } catch (atError) {
-        console.error('Error updating Airtable:', atError);
       }
 
       return res.send(`
@@ -272,7 +285,7 @@ app.get('/callback', async (req, res) => {
 // Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work
 app.post('/', (req, res) => {
   console.log('Form submitted via POST to root:', req.body);
-  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId));
+  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId || ''));
 });
 
 // Start the server

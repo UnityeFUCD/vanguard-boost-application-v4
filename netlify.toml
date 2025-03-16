@@ -2,7 +2,13 @@
   publish = "."
   command = "npm run build"
 
-# Redirect all paths to index.html for SPA routing
+# Allow thank-you.html to be accessed directly
+[[redirects]]
+  from = "/thank-you.html"
+  to = "/thank-you.html"
+  status = 200
+
+# Redirect all other paths to index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"

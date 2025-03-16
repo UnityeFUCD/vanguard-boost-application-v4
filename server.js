@@ -103,6 +103,7 @@ app.get('/callback', async (req, res) => {
   }
 
   // Decode the state parameter to get the applicant's nickname
+  console.log("Raw state parameter:", state);
   const userNickname = decodeURIComponent(state);
   console.log(`Received application nickname: ${userNickname}`);
 
@@ -189,8 +190,14 @@ app.get('/callback', async (req, res) => {
       `);
     }
 
+    // Clean and normalize both strings for comparison
+    const normalizedBungieName = String(fullBungieName).toLowerCase().trim();
+    const normalizedUserNickname = String(userNickname).toLowerCase().trim();
+
+    console.log(`Comparing normalized values: "${normalizedBungieName}" vs. "${normalizedUserNickname}"`);
+
     // Compare the full Bungie name with the application-provided nickname (case-insensitive)
-    if (String(fullBungieName).toLowerCase() === String(userNickname).toLowerCase()) {
+    if (normalizedBungieName === normalizedUserNickname) {
       console.log('Username verified successfully!');
 
       // Update Airtable record (if found)
@@ -254,6 +261,7 @@ app.get('/callback', async (req, res) => {
                 <p><strong>Your Nickname:</strong> ${userNickname}</p>
               </div>
               <p>Please ensure you're using the same Bungie account as you entered in your application.</p>
+              <p>Note: Make sure to include the full ID with "#" and numbers.</p>
             </div>
           </body>
         </html>
@@ -275,6 +283,7 @@ app.get('/callback', async (req, res) => {
           <div class="container">
             <h1>Verification Error</h1>
             <p>An unexpected error occurred. Please try again later.</p>
+            <p>Error details: ${err.message}</p>
           </div>
         </body>
       </html>

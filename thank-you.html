@@ -87,61 +87,61 @@
       margin: 20px 0;
     }
   </style>
-  <script>
-    // For debugging - log when the page loads
-    console.log("Thank you page loaded");
+ <script>
+  // For debugging - log when the page loads
+  console.log("Thank you page loaded");
+  
+  // Function to get URL parameters
+  function getUrlParam(name) {
+    var urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get(name);
+  }
+  
+  // When the page loads, update the verification link with the nickname and application ID
+  window.onload = function() {
+    // Get nickname from session storage
+    var nickname = sessionStorage.getItem("applicationNickname");
+    console.log("Retrieved nickname from session storage:", nickname);
     
-    // Function to get URL parameters
-    function getUrlParam(name) {
-      var urlParams = new URLSearchParams(window.location.search);
-      return urlParams.get(name);
+    // Get application ID from URL if available, otherwise from session storage
+    var appId = getUrlParam('applicationId') || sessionStorage.getItem("applicationId");
+    
+    // If there's no application ID, generate one
+    if (!appId) {
+      appId = 'APP' + Date.now();
+      sessionStorage.setItem("applicationId", appId);
     }
     
-    // When the page loads, update the verification link with the nickname and application ID
-    window.onload = function() {
-      // Get nickname from session storage
-      var nickname = sessionStorage.getItem("applicationNickname");
-      console.log("Retrieved nickname from session storage:", nickname);
-      
-      // Get application ID from URL if available, otherwise from session storage
-      var appId = getUrlParam('applicationId') || sessionStorage.getItem("applicationId");
-      
-      // If there's no application ID, generate one
-      if (!appId) {
-        appId = 'APP' + Date.now();
-        sessionStorage.setItem("applicationId", appId);
-      }
-      
-      // Make sure we have a nickname, and properly encode it for the state parameter
-      var stateParam = "";
-      if (nickname) {
-        // Properly encode the nickname - especially important for characters like #
-        stateParam = encodeURIComponent(nickname);
-        console.log("Using nickname for state:", nickname);
-        console.log("Encoded state parameter:", stateParam);
+    // Make sure we have a nickname, and properly encode it for the state parameter
+    var stateParam = "";
+    if (nickname) {
+      // Properly encode the nickname - especially important for characters like #
+      stateParam = encodeURIComponent(nickname);
+      console.log("Using nickname for state:", nickname);
+      console.log("Encoded state parameter:", stateParam);
+    } else {
+      stateParam = encodeURIComponent(appId);
+      console.log("No nickname found, using appId:", appId);
+    }
+    
+    // Get the verification button
+    var verifyButton = document.getElementById('verifyButton');
+    
+    // Update the href to include the state parameter
+    if (verifyButton) {
+      var baseUrl = verifyButton.getAttribute('href');
+      // Check if the URL already has a state parameter
+      if (baseUrl.includes('state=')) {
+        // Replace existing state parameter
+        verifyButton.href = baseUrl.replace(/state=[^&]*/, 'state=' + stateParam);
       } else {
-        stateParam = appId;
-        console.log("No nickname found, using appId:", appId);
+        // Add state parameter
+        verifyButton.href = baseUrl + '&state=' + stateParam;
       }
-      
-      // Get the verification button
-      var verifyButton = document.getElementById('verifyButton');
-      
-      // Update the href to include the state parameter
-      if (verifyButton) {
-        var baseUrl = verifyButton.getAttribute('href');
-        // Check if the URL already has a state parameter
-        if (baseUrl.includes('state=')) {
-          // Replace existing state parameter
-          verifyButton.href = baseUrl.replace(/state=[^&]*/, 'state=' + stateParam);
-        } else {
-          // Add state parameter
-          verifyButton.href = baseUrl + '&state=' + stateParam;
-        }
-        console.log("Final verification URL:", verifyButton.href);
-      }
-    };
-  </script>
+      console.log("Final verification URL:", verifyButton.href);
+    }
+  };
+</script>
 </head>
 <body>
   <div class="container">

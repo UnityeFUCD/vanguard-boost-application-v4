@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Thank You!</title>
+  <style>
+    /* Basic Reset */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Arial', sans-serif;
+      background-color: #101114;
+      color: #c4ff00;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 100px auto;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 2rem;
+      text-transform: uppercase;
+      margin-bottom: 1rem;
+    }
+
+    p {
+      font-size: 1.1rem;
+      line-height: 1.6;
+      color: #ffffff;
+      margin-bottom: 1.5rem;
+    }
+
+    .button {
+      display: inline-block;
+      margin-top: 2rem;
+      padding: 12px 24px;
+      background-color: #c4ff00;
+      color: #000;
+      text-decoration: none;
+      font-weight: bold;
+      text-transform: uppercase;
+      border-radius: 4px;
+      transition: background-color 0.2s ease;
+    }
+
+    .button:hover {
+      background-color: #a2d600;
+    }
+
+    .steps {
+      text-align: left;
+      background-color: rgba(0, 0, 0, 0.3);
+      padding: 20px;
+      border-radius: 8px;
+      margin: 30px 0;
+    }
+
+    .steps h2 {
+      text-align: center;
+      margin-bottom: 15px;
+      font-size: 1.3rem;
+    }
+
+    .steps ol {
+      margin-left: 20px;
+      color: #ffffff;
+    }
+
+    .steps li {
+      margin-bottom: 15px;
+    }
+
+    .important {
+      background-color: rgba(196, 255, 0, 0.1);
+      border-left: 4px solid #c4ff00;
+      padding: 10px 15px;
+      margin: 20px 0;
+    }
+  </style>
+  <script>
+    // For debugging - log when the page loads
+    console.log("Thank you page loaded");
+    
+    // Function to get URL parameters
+    function getUrlParam(name) {
+      var urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(name);
+    }
+    
+    // When the page loads, update the verification link with the nickname and application ID
+    window.onload = function() {
+      // Get nickname from session storage
+      var nickname = sessionStorage.getItem("applicationNickname");
+      console.log("Retrieved nickname from session storage:", nickname);
+      
+      // Get application ID from URL if available, otherwise from session storage
+      var appId = getUrlParam('applicationId') || sessionStorage.getItem("applicationId");
+      
+      // If there's no application ID, generate one
+      if (!appId) {
+        appId = 'APP' + Date.now();
+        sessionStorage.setItem("applicationId", appId);
+      }
+      
+      // Make sure we have a nickname, and properly encode it for the state parameter
+      var stateParam = "";
+      if (nickname) {
+        // Properly encode the nickname - especially important for characters like #
+        stateParam = encodeURIComponent(nickname);
+        console.log("Using nickname for state:", nickname);
+        console.log("Encoded state parameter:", stateParam);
+      } else {
+        stateParam = appId;
+        console.log("No nickname found, using appId:", appId);
+      }
+      
+      // Get the verification button
+      var verifyButton = document.getElementById('verifyButton');
+      
+      // Update the href to include the state parameter
+      if (verifyButton) {
+        var baseUrl = verifyButton.getAttribute('href');
+        // Check if the URL already has a state parameter
+        if (baseUrl.includes('state=')) {
+          // Replace existing state parameter
+          verifyButton.href = baseUrl.replace(/state=[^&]*/, 'state=' + stateParam);
+        } else {
+          // Add state parameter
+          verifyButton.href = baseUrl + '&state=' + stateParam;
+        }
+        console.log("Final verification URL:", verifyButton.href);
+      }
+    };
+  </script>
+</head>
+<body>
+  <div class="container">
+    <h1>Application Received!</h1>
+    <p>
+      Thank you for submitting your application to Vanguard Boost.<br>
+      We have received your information and will review it shortly.
+    </p>
+
+    <div class="steps">
+      <h2>Next Steps:</h2>
+      <ol>
+        <li>Complete Bungie Identity Verification (required)</li>
+        <li>Await review of your application (up to 7 days)</li>
+        <li>If approved, you'll be contacted via Discord</li>
+      </ol>
+    </div>
+
+    <div class="important">
+      <p><strong>IMPORTANT:</strong> You must complete the Bungie identity verification to proceed with your application.</p>
+      <p>The Bungie account you use for verification must match EXACTLY what you entered in the "Nickname" field of your application.</p>
+    </div>
+
+    <!-- URL without scope parameter -->
+    <a
+      id="verifyButton"
+      class="button"
+      href="https://www.bungie.net/en/OAuth/Authorize?client_id=49253&response_type=code&redirect_uri=https%3A%2F%2Fvanguard-bungie-verify-c7de395776dd.herokuapp.com%2Fcallback"
+    >
+      Complete Verification Now
+    </a>
+    
+    <p style="margin-top: 30px; font-size: 0.9rem; color: #888;">
+      If you have any questions, please contact us on Discord.
+    </p>
+  </div>
+</body>
+</html>

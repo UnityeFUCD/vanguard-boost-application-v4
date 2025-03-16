@@ -1,17 +1,22 @@
 {
     "name": "vanguard-bungie-verify",
     "version": "1.0.0",
+    "description": "Bungie verification service",
     "main": "server.js",
     "scripts": {
       "start": "node server.js"
-    },
-    "engines": {
-      "node": "18.x"
     },
     "dependencies": {
       "airtable": "^0.12.2",
       "axios": "^1.8.3",
       "dotenv": "^16.4.7",
       "express": "^4.21.2"
-    }
+    },
+    "engines": {
+      "node": "18.x"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC"
   }
+  

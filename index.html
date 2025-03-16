@@ -435,6 +435,13 @@
       border-color: var(--error) !important;
       box-shadow: 0 0 3px rgba(255, 51, 51, 0.3);
     }
+    /* Help text styling */
+    .help-text {
+      color: #aaa;
+      display: block;
+      margin-top: 5px;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -463,7 +470,7 @@
       method="POST"
       data-netlify="true"
       netlify-honeypot="bot-field"
-      action="/success"
+      action="/thank-you.html"
     >
       <!-- Hidden fields for Netlify -->
       <input type="hidden" name="form-name" value="applicationForm" />
@@ -485,8 +492,11 @@
               <input type="text" class="form-input" id="discord" name="discord" required />
             </div>
             <div class="form-group">
-              <label class="form-label required">Nickname</label>
-              <input type="text" class="form-input" id="nickname" name="nickname" required />
+              <label class="form-label required">Bungie ID (including #XXXX)</label>
+              <input type="text" class="form-input" id="nickname" name="nickname" required placeholder="Example: Username#1234" />
+              <small class="help-text">
+                Important: Enter your complete Bungie ID including the "#" and numbers (e.g., "Username#1234")
+              </small>
             </div>
             <div class="form-group">
               <label class="form-label">Referred By</label>

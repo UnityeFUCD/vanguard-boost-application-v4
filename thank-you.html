@@ -86,62 +86,94 @@
       padding: 10px 15px;
       margin: 20px 0;
     }
+
+    .debug-info {
+      background-color: rgba(0, 0, 0, 0.5);
+      border: 1px solid #333;
+      padding: 10px;
+      margin-top: 30px;
+      text-align: left;
+      display: none;
+    }
+
+    .debug-info pre {
+      color: #aaa;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
   </style>
- <script>
-  // For debugging - log when the page loads
-  console.log("Thank you page loaded");
-  
-  // Function to get URL parameters
-  function getUrlParam(name) {
-    var urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get(name);
-  }
-  
-  // When the page loads, update the verification link with the nickname and application ID
-  window.onload = function() {
-    // Get nickname from session storage
-    var nickname = sessionStorage.getItem("applicationNickname");
-    console.log("Retrieved nickname from session storage:", nickname);
+  <script>
+    // For debugging - log when the page loads
+    console.log("Thank you page loaded");
     
-    // Get application ID from URL if available, otherwise from session storage
-    var appId = getUrlParam('applicationId') || sessionStorage.getItem("applicationId");
-    
-    // If there's no application ID, generate one
-    if (!appId) {
-      appId = 'APP' + Date.now();
-      sessionStorage.setItem("applicationId", appId);
+    // Function to get URL parameters
+    function getUrlParam(name) {
+      var urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(name);
     }
     
-    // Make sure we have a nickname, and properly encode it for the state parameter
-    var stateParam = "";
-    if (nickname) {
-      // Properly encode the nickname - especially important for characters like #
-      stateParam = encodeURIComponent(nickname);
-      console.log("Using nickname for state:", nickname);
-      console.log("Encoded state parameter:", stateParam);
-    } else {
-      stateParam = encodeURIComponent(appId);
-      console.log("No nickname found, using appId:", appId);
-    }
-    
-    // Get the verification button
-    var verifyButton = document.getElementById('verifyButton');
-    
-    // Update the href to include the state parameter
-    if (verifyButton) {
-      var baseUrl = verifyButton.getAttribute('href');
-      // Check if the URL already has a state parameter
-      if (baseUrl.includes('state=')) {
-        // Replace existing state parameter
-        verifyButton.href = baseUrl.replace(/state=[^&]*/, 'state=' + stateParam);
-      } else {
-        // Add state parameter
-        verifyButton.href = baseUrl + '&state=' + stateParam;
+    // When the page loads, update the verification link with the nickname and application ID
+    window.onload = function() {
+      // Get nickname from session storage
+      var nickname = sessionStorage.getItem("applicationNickname");
+      console.log("Retrieved nickname from session storage:", nickname);
+      
+      // Get application ID from URL if available, otherwise from session storage
+      var appId = getUrlParam('applicationId') || sessionStorage.getItem("applicationId");
+      
+      // If there's no application ID, generate one
+      if (!appId) {
+        appId = 'APP' + Date.now();
+        sessionStorage.setItem("applicationId", appId);
       }
-      console.log("Final verification URL:", verifyButton.href);
-    }
-  };
-</script>
+      
+      // Make sure we have a nickname, and properly encode it for the state parameter
+      var stateParam = "";
+      if (nickname) {
+        // Properly encode the nickname - especially important for characters like #
+        stateParam = encodeURIComponent(nickname);
+        console.log("Using nickname for state:", nickname);
+        console.log("Encoded state parameter:", stateParam);
+      } else {
+        stateParam = encodeURIComponent(appId);
+        console.log("No nickname found, using appId:", appId);
+      }
+      
+      // Get the verification button
+      var verifyButton = document.getElementById('verifyButton');
+      
+      // Update the href to include the state parameter
+      if (verifyButton) {
+        var baseUrl = verifyButton.getAttribute('href');
+        // Check if the URL already has a state parameter
+        if (baseUrl.includes('state=')) {
+          // Replace existing state parameter
+          verifyButton.href = baseUrl.replace(/state=[^&]*/, 'state=' + stateParam);
+        } else {
+          // Add state parameter
+          verifyButton.href = baseUrl + '&state=' + stateParam;
+        }
+        console.log("Final verification URL:", verifyButton.href);
+        
+        // For debugging, show the encoded URL in the debug section
+        var debugSection = document.getElementById('debugSection');
+        var debugContent = document.getElementById('debugContent');
+        if (debugSection && debugContent) {
+          debugContent.textContent = 'Nickname: ' + nickname + '\n' +
+                                     'Encoded: ' + stateParam + '\n' +
+                                     'Verification URL: ' + verifyButton.href;
+          
+          // Show the debug section in development environments
+          if (window.location.hostname === 'localhost' || 
+              window.location.hostname === '127.0.0.1' ||
+              window.location.hostname.includes('preview')) {
+            debugSection.style.display = 'block';
+          }
+        }
+      }
+    };
+  </script>
 </head>
 <body>
   <div class="container">
@@ -162,7 +194,7 @@
 
     <div class="important">
       <p><strong>IMPORTANT:</strong> You must complete the Bungie identity verification to proceed with your application.</p>
-      <p>The Bungie account you use for verification must match EXACTLY what you entered in the "Nickname" field of your application.</p>
+      <p>The Bungie account you use for verification must match EXACTLY what you entered in the "Bungie ID" field of your application (including the # and numbers).</p>
     </div>
 
     <!-- URL without scope parameter -->
@@ -177,6 +209,12 @@
     <p style="margin-top: 30px; font-size: 0.9rem; color: #888;">
       If you have any questions, please contact us on Discord.
     </p>
+    
+    <!-- Debug information section - only visible in development -->
+    <div id="debugSection" class="debug-info">
+      <h3>Debug Information</h3>
+      <pre id="debugContent">Loading...</pre>
+    </div>
   </div>
 </body>
 </html>

@@ -1,0 +1,28 @@
+[build]
+  publish = "."
+  command = "npm run build"
+
+# Redirect all paths to index.html for SPA routing
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = false
+  
+# Redirect for form submission handling
+[[redirects]]
+  from = "/submit-form"
+  to = "/.netlify/functions/submit-form"
+  status = 200
+  force = true
+
+# Handle Bungie callback
+[[redirects]]
+  from = "/callback"
+  to = "/.netlify/functions/callback"
+  status = 200
+  force = true
+
+# Handle form data processing
+[functions]
+  directory = "functions"

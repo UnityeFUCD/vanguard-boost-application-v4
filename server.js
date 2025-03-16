@@ -2,15 +2,18 @@
 const express = require('express');
 const axios = require('axios');
 const Airtable = require('airtable');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3195;
 
-// Optional root route for testing
-app.get('/', (req, res) => {
-  res.send('Bungie verification service is running.');
-});
+// Middleware to parse JSON and form data
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from the root directory
+app.use(express.static(__dirname));
 
 // Airtable setup
 const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
@@ -19,8 +22,42 @@ const table = base(process.env.AIRTABLE_TABLE_NAME);
 // Bungie API credentials from environment variables
 const { BUNGIE_CLIENT_ID, BUNGIE_CLIENT_SECRET, BUNGIE_API_KEY, REDIRECT_URI } = process.env;
 
-// Middleware to parse JSON bodies
-app.use(express.json());
+// Root route - serve the index.html file
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Thank you page route
+app.get('/thank-you.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'thank-you.html'));
+});
+
+// Form submission handler
+app.post('/submit-form', (req, res) => {
+  console.log('Form submitted:', req.body);
+  
+  // Store form data in Airtable if API key is configured
+  if (process.env.AIRTABLE_API_KEY) {
+    try {
+      table.create({
+        nickname: req.body.nickname,
+        email: req.body.email,
+        discord: req.body.discord,
+        // Add other fields as needed
+      }, function(err, record) {
+        if (err) {
+          console.error('Error saving to Airtable:', err);
+        } else {
+          console.log('Saved to Airtable:', record.getId());
+        }
+      });
+    } catch (error) {
+      console.error('Airtable error:', error);
+    }
+  }
+  
+  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId));
+});
 
 // OAuth callback route
 app.get('/callback', async (req, res) => {
@@ -203,7 +240,7 @@ app.get('/callback', async (req, res) => {
                 <p><strong>Bungie Username:</strong> ${fullBungieName}</p>
                 <p><strong>Your Nickname:</strong> ${userNickname}</p>
               </div>
-              <p>Please ensure you’re using the same Bungie account as you entered in your application.</p>
+              <p>Please ensure you're using the same Bungie account as you entered in your application.</p>
             </div>
           </body>
         </html>
@@ -232,7 +269,14 @@ app.get('/callback', async (req, res) => {
   }
 });
 
+// Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work
+app.post('/', (req, res) => {
+  console.log('Form submitted via POST to root:', req.body);
+  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId));
+});
+
 // Start the server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Visit http://localhost:${PORT} to access the application`);
 });

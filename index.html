@@ -467,9 +467,8 @@
     >
       <!-- Hidden fields for Netlify -->
       <input type="hidden" name="form-name" value="applicationForm" />
-      <input type="hidden" name="redirect" value="/thank-you.html" />
-      <!-- Hidden Application ID -->
-      <input type="hidden" name="applicationId" id="applicationId" value="">
+      <!-- Removed the hidden "redirect" field to rely solely on action="/thank-you.html" -->
+
       <!-- Page 1 -->
       <div class="page active" id="page1">
         <!-- Contact Information Section -->
@@ -1024,17 +1023,9 @@
       // Combined submit handler: update IDs, validate page 2, check captcha, and submit
       if (applicationForm) {
         applicationForm.addEventListener("submit", function (e) {
-          // Update the applicationId field and redirect URL with the unique ID
+          // Set the final applicationId
           document.getElementById("applicationId").value = applicationId;
-          const redirectField = document.querySelector('input[name="redirect"]');
-          if (redirectField) {
-            const redirectUrl = redirectField.value;
-            if (redirectUrl.includes('?')) {
-              redirectField.value = redirectUrl + '&applicationId=' + applicationId;
-            } else {
-              redirectField.value = redirectUrl + '?applicationId=' + applicationId;
-            }
-          }
+
           // Store nickname in sessionStorage for later verification
           const nickname = document.getElementById("nickname").value;
           if (nickname) {

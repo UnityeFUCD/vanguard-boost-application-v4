@@ -7,10 +7,12 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3195;
 
-// Serve static files from the public directory
-app.use(express.static('public'));
+// Optional root route for testing
+app.get('/', (req, res) => {
+  res.send('Bungie verification service is running.');
+});
 
-// Initialize Airtable
+// Airtable setup
 const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
 const table = base(process.env.AIRTABLE_TABLE_NAME);
 

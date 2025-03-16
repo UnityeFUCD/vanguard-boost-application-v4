@@ -1,8 +1,3 @@
 [build]
-  publish = "public"  # or the directory containing your HTML files
-  command = "npm run build"  # if applicable
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+  publish = "."  # Use root directory
+  command = "echo 'No build step needed'"

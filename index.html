@@ -70,7 +70,7 @@
             </div>
             <div class="form-group">
               <label class="form-label required">Discord Handle</label>
-              <input type="text" class="form-input" id="discord" name="discord" required />
+              <input type="text" class="form-input" id="discord" name="discord" required placeholder="Example: username#1234" />
             </div>
             <div class="form-group">
               <label class="form-label required">Bungie ID (including #XXXX)</label>
@@ -138,8 +138,19 @@
               <option value="United Kingdom">United Kingdom</option>
               <option value="Australia">Australia</option>
               <option value="Germany">Germany</option>
+              <option value="France">France</option>
+              <option value="Spain">Spain</option>
+              <option value="Italy">Italy</option>
+              <option value="Netherlands">Netherlands</option>
+              <option value="Russia">Russia</option>
+              <option value="Brazil">Brazil</option>
+              <option value="Japan">Japan</option>
+              <option value="South Korea">South Korea</option>
               <option value="Other">Other</option>
             </select>
+            <div id="otherCountryInput" style="display: none; margin-top: 10px;">
+              <input type="text" class="form-input" id="otherCountry" name="otherCountry" placeholder="Specify your country" />
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label required">SELECT ALL APPLICABLE SERVICES</label>
@@ -147,26 +158,32 @@
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="Piloted" />
                 <span class="checkbox-label">PILOTED
-                  <span class="tooltip" title="Piloted: A professional pre-runs the game/match on your behalf.">?</span>
+                  <span class="tooltip" title="Piloted: You play on the client's account">?</span>
                 </span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="Self-play" />
                 <span class="checkbox-label">SELF-PLAY
-                  <span class="tooltip" title="Self-play: You play the game yourself.">?</span>
+                  <span class="tooltip" title="Self-play: Client plays their own account with your help">?</span>
                 </span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="Coaching" />
-                <span class="checkbox-label">COACHING</span>
+                <span class="checkbox-label">COACHING
+                  <span class="tooltip" title="Coaching: You teach and guide clients to improve">?</span>
+                </span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="PvP" />
-                <span class="checkbox-label">PVP</span>
+                <span class="checkbox-label">PVP
+                  <span class="tooltip" title="Player vs Player content">?</span>
+                </span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="PvE" />
-                <span class="checkbox-label">PVE</span>
+                <span class="checkbox-label">PVE
+                  <span class="tooltip" title="Player vs Environment content">?</span>
+                </span>
               </label>
             </div>
             <div class="error-message" id="servicesError">Please select at least one service</div>
@@ -218,13 +235,13 @@
           <h2 class="section-title">Verification</h2>
           <div class="form-group">
             <label class="form-label required">
-              Upload screenshots to verify your gaming profile and completed orders
+              Share links to screenshots showing your gaming profile and completed orders
             </label>
-            <div class="file-upload">
-              <label for="fileInput" class="file-btn">Add Files</label>
-              <input type="file" id="fileInput" name="files[]" accept="image/*" multiple />
-            </div>
-            <div class="file-list" id="fileList"></div>
+            <input type="text" class="form-input" id="screenshotLink1" name="screenshotLink1" placeholder="Imgur or similar screenshot link 1" required />
+            <input type="text" class="form-input" id="screenshotLink2" name="screenshotLink2" placeholder="Imgur or similar screenshot link 2" style="margin-top: 10px;" />
+            <small class="help-text">
+              Share links to screenshots of your game profile, completed orders, or achievements. Upload your images to Imgur.com or similar and paste the links here.
+            </small>
           </div>
         </div>
 
@@ -328,7 +345,7 @@
           </div>
           <div class="form-group">
             <label class="form-label">Tell us something about yourself</label>
-            <textarea class="form-textarea" id="aboutYourself" name="aboutYourself" placeholder="Add here..."></textarea>
+            <textarea class="form-textarea" id="aboutYourself" name="aboutYourself" placeholder="Optional - Share anything else that might help your application"></textarea>
           </div>
         </div>
 
@@ -393,7 +410,7 @@
               <label class="checkbox-option">
                 <input type="checkbox" class="checkbox-input" id="submissionAgreement" name="submissionAgreement" required />
                 <span class="checkbox-label">
-                  CLICKING THE "SUBMIT" BUTTON SENDS THE APPLICATION FOR CONSIDERATION, WHICH MAY TAKE UP TO 3 DAYS OR LONGER. IF APPROVED, YOU WILL BE CONTACTED VIA DISCORD. <strong>I'VE READ THIS INFORMATION THOROUGHLY.</strong>
+                  CLICKING THE "SUBMIT" BUTTON SENDS THE APPLICATION FOR CONSIDERATION, WHICH MAY TAKE UP TO 3 DAYS. IF APPROVED, YOU WILL BE CONTACTED VIA DISCORD. <strong>I'VE READ THIS INFORMATION THOROUGHLY.</strong>
                 </span>
               </label>
               <label class="checkbox-option" style="margin-top: 20px;">
@@ -462,6 +479,15 @@
         });
       }
 
+      // Country selection dropdown
+      const countrySelect = document.getElementById("country");
+      const otherCountryInput = document.getElementById("otherCountryInput");
+      if (countrySelect && otherCountryInput) {
+        countrySelect.addEventListener("change", function () {
+          otherCountryInput.style.display = (this.value === "Other") ? "block" : "none";
+        });
+      }
+
       // Availability radio buttons
       const availabilityRadios = document.querySelectorAll('input[name="availability"]');
       const otherAvailabilityInput = document.getElementById("otherAvailabilityInput");
@@ -470,61 +496,6 @@
           otherAvailabilityInput.style.display = (this.value === "Other") ? "block" : "none";
         });
       });
-
-      // File upload functionality
-      const fileInput = document.getElementById("fileInput");
-      const fileList = document.getElementById("fileList");
-      const MAX_FILES = 2;
-      let uploadedFiles = [];
-      if (fileInput) {
-        fileInput.addEventListener("change", function () {
-          if (this.files.length > 0) {
-            if (uploadedFiles.length >= MAX_FILES) {
-              alert("Maximum of " + MAX_FILES + " files allowed");
-              return;
-            }
-            const file = this.files[0];
-            const fileObj = { id: Date.now(), name: file.name, file: file };
-            uploadedFiles.push(fileObj);
-            updateFileListUI();
-            this.value = "";
-          }
-        });
-      }
-      function updateFileListUI() {
-        fileList.innerHTML = "";
-        uploadedFiles.forEach(function (fileObj) {
-          const fileItem = document.createElement("div");
-          fileItem.className = "file-item";
-          const fileName = document.createElement("div");
-          fileName.className = "file-item-name";
-          fileName.textContent = fileObj.name;
-          const deleteButton = document.createElement("button");
-          deleteButton.className = "file-delete";
-          deleteButton.textContent = "×";
-          deleteButton.setAttribute("data-id", fileObj.id);
-          deleteButton.addEventListener("click", function () {
-            deleteFile(fileObj.id);
-          });
-          fileItem.appendChild(fileName);
-          fileItem.appendChild(deleteButton);
-          fileList.appendChild(fileItem);
-        });
-        if (uploadedFiles.length >= MAX_FILES) {
-          fileInput.disabled = true;
-          document.querySelector(".file-btn").style.opacity = "0.5";
-        } else {
-          fileInput.disabled = false;
-          document.querySelector(".file-btn").style.opacity = "1";
-        }
-      }
-      function deleteFile(fileId) {
-        const index = uploadedFiles.findIndex(file => file.id == fileId);
-        if (index !== -1) {
-          uploadedFiles.splice(index, 1);
-          updateFileListUI();
-        }
-      }
 
       // Page navigation
       if (nextButton) {

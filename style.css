@@ -401,8 +401,9 @@ body::before {
 .tooltip:hover::after {
   content: attr(title);
   position: absolute;
-  top: 25px;
-  left: 0;
+  bottom: 25px;
+  left: 50%;
+  transform: translateX(-50%);
   background: var(--section-bg);
   color: var(--text);
   padding: 8px 12px;
@@ -413,6 +414,20 @@ body::before {
   border-left: 3px solid var(--primary);
   font-weight: normal;
   min-width: 200px;
+  text-align: center;
+}
+
+/* Add a small arrow at the bottom of the tooltip */
+.tooltip:hover::before {
+  content: '';
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 5px;
+  border-style: solid;
+  border-color: var(--section-bg) transparent transparent transparent;
+  z-index: 11;
 }
 
 /* File upload styling */

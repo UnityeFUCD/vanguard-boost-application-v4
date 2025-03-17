@@ -103,31 +103,23 @@
         console.warn('Unable to store in sessionStorage:', e);
       }
       
-      // Create a state parameter that includes both nickname and applicationId
-      let stateParam = '';
-      if (nickname) {
-        // Properly encode the nickname - especially important for characters like #
-        stateParam = encodeURIComponent(nickname);
-        console.log("Using nickname for state:", nickname);
-        console.log("Encoded state parameter:", stateParam);
-      } else {
-        stateParam = encodeURIComponent(appId);
-        console.log("No nickname found, using appId:", appId);
-      }
-
       // Get the verification button
       var verifyButton = document.getElementById('verifyButton');
 
       // Update the href to include the state parameter
       if (verifyButton) {
         var baseUrl = verifyButton.getAttribute('href');
-        // Create a state parameter that includes both nickname and applicationId
-        var stateData = {
-          nickname: nickname || '',
-          applicationId: appId || ''
-        };
-        // Encode the JSON object as the state parameter
-        stateParam = encodeURIComponent(JSON.stringify(stateData));
+        
+        // Just use the nickname directly as the state parameter (much simpler)
+        if (nickname) {
+          // Properly encode the nickname - especially important for characters like #
+          stateParam = encodeURIComponent(nickname);
+          console.log("Using nickname for state:", nickname);
+          console.log("Encoded state parameter:", stateParam);
+        } else {
+          stateParam = encodeURIComponent(appId);
+          console.log("No nickname found, using appId:", appId);
+        }
         
         // Check if the URL already has a state parameter
         if (baseUrl.includes('state=')) {
@@ -145,7 +137,7 @@
         if (debugSection && debugContent) {
           debugContent.textContent = 'Nickname: ' + nickname + '\n' +
                                      'Application ID: ' + appId + '\n' +
-                                     'Encoded: ' + stateParam + '\n' +
+                                     'State Parameter: ' + stateParam + '\n' +
                                      'Verification URL: ' + verifyButton.href;
 
           // Show the debug section in development environments
@@ -192,6 +184,11 @@
       <div class="important">
         <p><strong>IMPORTANT:</strong> You must complete the Bungie identity verification to proceed with your application.</p>
         <p>The Bungie account you use for verification must match EXACTLY what you entered in the "Bungie ID" field of your application (including the # and numbers).</p>
+      </div>
+      
+      <div class="section-special" style="margin: 30px 0;">
+        <p><strong>What happens next?</strong></p>
+        <p>After verification, a recruiter will review your application within 3 days. Please be patient and keep an eye on your Discord for messages from our recruitment team.</p>
       </div>
 
       <!-- URL with configurable redirect_uri -->

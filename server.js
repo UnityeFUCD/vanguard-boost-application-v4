@@ -3,10 +3,26 @@ const express = require('express');
 const axios = require('axios');
 const Airtable = require('airtable');
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3195;
+
+// Secret key for token generation - would typically be in environment variables
+const SECRET_KEY = process.env.TOKEN_SECRET || 'vanguard-boost-verification-secret';
+
+// Function to generate a verification token
+function generateVerificationToken(nickname, submissionId) {
+  const data = `${nickname}:${submissionId}:${SECRET_KEY}`;
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// Function to validate a verification token
+function validateVerificationToken(nickname, submissionId, token) {
+  const expectedToken = generateVerificationToken(nickname, submissionId);
+  return token === expectedToken;
+}
 
 // Middleware to parse JSON and form data
 app.use(express.json());
@@ -121,9 +137,10 @@ app.get('/callback', async (req, res) => {
   console.log("Raw state parameter:", state);
   let userNickname = '';
   let applicationId = '';
+  let submissionId = '';
   
   try {
-    // Try to parse state as a JSON object (old format)
+    // Try to parse state as a JSON object
     const decodedState = decodeURIComponent(state);
     if (decodedState.startsWith('{') && decodedState.includes('"nickname"')) {
       try {
@@ -131,13 +148,14 @@ app.get('/callback', async (req, res) => {
         const stateData = JSON.parse(decodedState);
         userNickname = stateData.nickname || '';
         applicationId = stateData.applicationId || '';
-        console.log(`Parsed from JSON - Nickname: ${userNickname}, ApplicationId: ${applicationId}`);
+        submissionId = stateData.submissionId || '';
+        console.log(`Parsed from JSON - Nickname: ${userNickname}, ApplicationId: ${applicationId}, SubmissionId: ${submissionId}`);
       } catch (jsonError) {
         console.error('Error parsing JSON state:', jsonError);
         userNickname = decodedState;
       }
     } else {
-      // It's just a simple string (new format)
+      // It's just a simple string (old format)
       userNickname = decodedState;
       console.log(`Using direct format - Nickname: ${userNickname}`);
     }
@@ -153,6 +171,7 @@ app.get('/callback', async (req, res) => {
   
   console.log(`Received application nickname: ${userNickname}`);
   console.log(`Received application ID: ${applicationId}`);
+  console.log(`Received submission ID: ${submissionId}`);
 
   try {
     // Exchange authorization code for an access token
@@ -272,18 +291,37 @@ app.get('/callback', async (req, res) => {
         try {
           let records = [];
           
-          // First try to find a record by applicationId (most reliable)
-          if (applicationId) {
+          // First try to find a record by submissionId (most reliable)
+          if (submissionId) {
+            records = await table.select({
+              filterByFormula: `{submissionId} = '${submissionId}'`
+            }).firstPage();
+            
+            if (records.length > 0) {
+              console.log('Found record by submissionId');
+            }
+          }
+          
+          // Next try applicationId
+          if (records.length === 0 && applicationId) {
             records = await table.select({
               filterByFormula: `{applicationId} = '${applicationId}'`
             }).firstPage();
+            
+            if (records.length > 0) {
+              console.log('Found record by applicationId');
+            }
           }
           
-          // If no records found by applicationId, try nickname as fallback
+          // If no records found, try nickname as fallback
           if (records.length === 0) {
             records = await table.select({
               filterByFormula: `OR({nickname} = '${userNickname}', {bungieID} = '${normalizedUserNickname}')`
             }).firstPage();
+            
+            if (records.length > 0) {
+              console.log('Found record by nickname');
+            }
           }
 
           if (records.length > 0) {
@@ -294,7 +332,7 @@ app.get('/callback', async (req, res) => {
             });
             console.log('Airtable record updated successfully.');
           } else {
-            console.warn('No matching Airtable record found for applicationId or nickname:', applicationId, userNickname);
+            console.warn('No matching Airtable record found for submissionId, applicationId, or nickname:', submissionId, applicationId, userNickname);
             // Try one more time with a substring search
             try {
               const fuzzyRecords = await table.select({
@@ -394,10 +432,150 @@ app.get('/success', (req, res) => {
   res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.query.applicationId || ''));
 });
 
+// Email verification endpoint
+app.get('/email-verify', async (req, res) => {
+  const { nickname, submissionId, token } = req.query;
+  
+  if (!nickname || !submissionId || !token) {
+    return res.status(400).send(`
+      <html>
+        <head>
+          <title>Verification Error</title>
+          <style>
+            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+            h1 { color: #ff3e3e; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Verification Error</h1>
+            <p>Missing required verification parameters.</p>
+            <p>Please use the link provided in your email.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+  
+  // Validate the token
+  if (!validateVerificationToken(nickname, submissionId, token)) {
+    return res.status(403).send(`
+      <html>
+        <head>
+          <title>Verification Error</title>
+          <style>
+            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+            h1 { color: #ff3e3e; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Verification Error</h1>
+            <p>Invalid verification token.</p>
+            <p>Please use the link provided in your email or contact support.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+  
+  // Check if this submission is already verified
+  if (table) {
+    try {
+      const records = await table.select({
+        filterByFormula: `{submissionId} = '${submissionId}'`
+      }).firstPage();
+      
+      if (records.length > 0) {
+        const record = records[0];
+        
+        // If already verified, show success message
+        if (record.get('verified') === true) {
+          return res.send(`
+            <html>
+              <head>
+                <title>Already Verified</title>
+                <style>
+                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                  h1 { color: #c4ff00; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <h1>Already Verified</h1>
+                  <p>Your Bungie identity has already been verified successfully.</p>
+                  <p>No further action is needed. Your application is being reviewed.</p>
+                </div>
+              </body>
+            </html>
+          `);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking verification status:', error);
+    }
+  }
+  
+  // If we got here, the user needs to verify - redirect to Bungie OAuth
+  const state = encodeURIComponent(JSON.stringify({
+    nickname,
+    submissionId
+  }));
+  
+  const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
+  
+  res.redirect(authUrl);
+});
+
 // Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work
 app.post('/', (req, res) => {
   console.log('Form submitted via POST to root:', req.body);
   res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId || ''));
+});
+
+// Development utility route to generate verification links (should be disabled in production)
+app.get('/generate-email-link', (req, res) => {
+  const { nickname, submissionId } = req.query;
+  
+  if (!nickname || !submissionId) {
+    return res.status(400).send('Missing required parameters: nickname and submissionId');
+  }
+  
+  const token = generateVerificationToken(nickname, submissionId);
+  const verificationUrl = `${req.protocol}://${req.get('host')}/email-verify?nickname=${encodeURIComponent(nickname)}&submissionId=${encodeURIComponent(submissionId)}&token=${token}`;
+  
+  res.send(`
+    <html>
+      <head>
+        <title>Verification Link Generator</title>
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; padding: 20px; }
+          .container { max-width: 800px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+          h1 { color: #c4ff00; }
+          .link-box { background: #1a1a1a; padding: 15px; border-radius: 5px; margin: 20px 0; word-break: break-all; }
+          .warning { color: #ff3e3e; margin-top: 20px; padding: 10px; border: 1px solid #ff3e3e; border-radius: 5px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Verification Link Generator</h1>
+          <p><strong>Nickname:</strong> ${nickname}</p>
+          <p><strong>Submission ID:</strong> ${submissionId}</p>
+          <p><strong>Generated URL:</strong></p>
+          <div class="link-box">
+            <a href="${verificationUrl}" style="color: #c4ff00;">${verificationUrl}</a>
+          </div>
+          <p>Click the link above to test the verification process.</p>
+          <div class="warning">
+            <strong>Warning:</strong> This utility endpoint should be disabled in production to prevent security issues.
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
 });
 
 // Start the server

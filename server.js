@@ -123,19 +123,31 @@ app.get('/callback', async (req, res) => {
   let applicationId = '';
   
   try {
-    // Try to parse state as a JSON object (new format)
-    const stateData = JSON.parse(decodeURIComponent(state));
-    userNickname = stateData.nickname || '';
-    applicationId = stateData.applicationId || '';
-    console.log(`Parsed from JSON - Nickname: ${userNickname}, ApplicationId: ${applicationId}`);
+    // Try to parse state as a JSON object (old format)
+    const decodedState = decodeURIComponent(state);
+    if (decodedState.startsWith('{') && decodedState.includes('"nickname"')) {
+      try {
+        // It's a JSON object
+        const stateData = JSON.parse(decodedState);
+        userNickname = stateData.nickname || '';
+        applicationId = stateData.applicationId || '';
+        console.log(`Parsed from JSON - Nickname: ${userNickname}, ApplicationId: ${applicationId}`);
+      } catch (jsonError) {
+        console.error('Error parsing JSON state:', jsonError);
+        userNickname = decodedState;
+      }
+    } else {
+      // It's just a simple string (new format)
+      userNickname = decodedState;
+      console.log(`Using direct format - Nickname: ${userNickname}`);
+    }
   } catch (e) {
-    // Fallback for old format where state is just the nickname
+    // Fallback for any decoding errors
     try {
-      userNickname = decodeURIComponent(state);
-      console.log(`Using legacy format - Nickname: ${userNickname}`);
+      userNickname = state; // Use raw state as fallback
+      console.log(`Using raw state: ${userNickname}`);
     } catch (decodeErr) {
       console.error('Failed to decode state parameter:', decodeErr);
-      userNickname = state; // Use raw state as last resort
     }
   }
   
@@ -227,13 +239,33 @@ app.get('/callback', async (req, res) => {
 
     // Clean and normalize both strings for comparison
     const normalizedBungieName = String(fullBungieName).toLowerCase().trim();
-    const normalizedUserNickname = String(userNickname).toLowerCase().trim();
+    
+    // Extract just the nickname from the stateData for comparison
+    let nicknameForComparison = userNickname;
+    
+    // If userNickname looks like JSON, try to parse it to get just the nickname value
+    if (typeof userNickname === 'string' && userNickname.includes('"nickname"')) {
+      try {
+        // It might be a stringified JSON object
+        const parsedData = JSON.parse(userNickname);
+        if (parsedData && parsedData.nickname) {
+          nicknameForComparison = parsedData.nickname;
+          console.log(`Extracted nickname from JSON: ${nicknameForComparison}`);
+        }
+      } catch (e) {
+        console.warn('Failed to parse JSON nickname, using as-is:', e);
+      }
+    }
+    
+    const normalizedUserNickname = String(nicknameForComparison).toLowerCase().trim();
 
     console.log(`Comparing normalized values: "${normalizedBungieName}" vs. "${normalizedUserNickname}"`);
 
-    // Compare the full Bungie name with the application-provided nickname (case-insensitive)
-    if (normalizedBungieName === normalizedUserNickname) {
-      console.log('Username verified successfully!');
+    // ONLY do exact matching - nothing else is acceptable
+    const matched = normalizedBungieName === normalizedUserNickname;
+    
+    if (matched) {
+      console.log('Username verified successfully - exact match!');
 
       // Update Airtable record (if found)
       if (table) {
@@ -306,7 +338,7 @@ app.get('/callback', async (req, res) => {
         </html>
       `);
     } else {
-      console.warn(`Verification failed: "${fullBungieName}" vs. "${userNickname}"`);
+      console.log('Username verification failed - Bungie ID must match EXACTLY what was entered in the form');
       return res.status(400).send(`
         <html>
           <head>

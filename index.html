@@ -4,452 +4,29 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Vanguard Boost Application</title>
-  <style>
-    /* DARKER COLOR SCHEME & GLOBAL STYLES */
-    :root {
-      --primary: #c4ff00;          /* Neon green */
-      --primary-dark: #a2d600;
-      --secondary: #08080B;        /* Dark background */
-      --background-dark: #050507;  /* Even darker background */
-      --background-gradient: linear-gradient(to bottom, #08080B, #050507);
-      --text: #ffffff;
-      --text-secondary: #b0b0b0;
-      --error: #ff3e3e;
-      --border: #222222;
-      --input-bg: #1a1a1d;
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: 'Rajdhani', 'Roboto', Arial, sans-serif;
-    }
-    body {
-      /* Original background: dark gradient */
-      background: var(--background-gradient);
-      color: var(--text);
-      line-height: 1.6;
-      min-height: 100vh;
-      background-attachment: fixed;
-      /* OVERRIDE: White background with grid below */
-      background-color: #fff !important;
-      background-image:
-        linear-gradient(to right, rgba(0,0,0,0.4) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(0,0,0,0.4) 1px, transparent 1px);
-      background-size: 45px 45px;
-      background-repeat: repeat;
-    }
-    .container {
-      max-width: 1000px;
-      margin: 0 auto;
-      padding: 20px;
-    }
-    /* HEADER WITH NEW TITLE & SUBTEXT */
-    .header {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    .header h1 {
-      font-size: 32px;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-      color: var(--primary);
-      font-weight: 800;
-      margin-bottom: 5px;
-      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
-    }
-    .header p {
-      font-size: 16px;
-      color: var(--primary);
-      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
-    }
-    .progress-container {
-      display: flex;
-      justify-content: space-between;
-      margin: 30px auto;
-      max-width: 800px;
-      position: relative;
-    }
-    .progress-bar {
-      position: absolute;
-      top: 50%;
-      left: 0;
-      right: 0;
-      height: 2px;
-      background-color: #333;
-      transform: translateY(-50%);
-      z-index: 0;
-    }
-    .progress-fill {
-      position: absolute;
-      top: 0;
-      left: 0;
-      height: 100%;
-      background-color: var(--primary);
-      width: 0%;
-      transition: width 0.3s;
-      z-index: 1;
-    }
-    .step {
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      background-color: #333;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: relative;
-      z-index: 2;
-      font-weight: bold;
-      border: 2px solid #444;
-    }
-    .step.active {
-      background-color: var(--primary);
-      color: black;
-      border: 2px solid var(--primary);
-      box-shadow: 0 0 0 4px rgba(196, 255, 0, 0.3);
-    }
-    .step.completed {
-      background-color: var(--primary-dark);
-      color: black;
-    }
-    .step-label {
-      position: absolute;
-      bottom: -25px;
-      left: 50%;
-      transform: translateX(-50%);
-      white-space: nowrap;
-      font-size: 12px;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-    }
-    .page {
-      display: none;
-    }
-    .page.active {
-      display: block;
-    }
-    .section {
-      margin-bottom: 30px;
-      background-color: rgba(0, 0, 0, 0.9) !important;
-      border-radius: 8px;
-      padding: 20px;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-      border: 1px solid #222;
-      color: #fff !important;
-    }
-    .section h2 {
-      font-size: 20px;
-      margin-bottom: 15px;
-      text-transform: uppercase;
-      font-weight: 800;
-      letter-spacing: 1px;
-      color: var(--text);
-      border-bottom: 1px solid #333;
-      padding-bottom: 8px;
-    }
-    .form-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 20px;
-    }
-    .form-group {
-      margin-bottom: 15px;
-    }
-    .form-label {
-      margin-bottom: 5px;
-      display: block;
-      color: var(--text);
-      font-size: 14px;
-      text-transform: uppercase;
-    }
-    .required::after {
-      content: "*";
-      color: var(--primary);
-      margin-left: 3px;
-    }
-    .form-input,
-    .form-select,
-    .form-textarea {
-      width: 100%;
-      padding: 12px;
-      background-color: var(--input-bg);
-      border: 1px solid var(--border);
-      color: white;
-      border-radius: 6px;
-      font-size: 16px;
-    }
-    .form-input:focus,
-    .form-select:focus,
-    .form-textarea:focus {
-      outline: none;
-      border-color: var(--primary);
-      box-shadow: 0 0 0 2px rgba(196, 255, 0, 0.2);
-    }
-    .form-textarea {
-      resize: vertical;
-      min-height: 100px;
-    }
-    .radio-group,
-    .checkbox-group {
-      margin-top: 10px;
-    }
-    .radio-option,
-    .checkbox-option {
-      display: flex;
-      align-items: center;
-      margin-bottom: 10px;
-      cursor: pointer;
-    }
-    .checkbox-group .checkbox-option {
-      display: block;
-      margin-bottom: 10px;
-    }
-    /* FIXED CHECKBOX & RADIO SIZING */
-    .radio-input,
-    .checkbox-input {
-      position: relative;
-      width: 14px;
-      height: 14px;
-      margin-right: 10px;
-      margin-top: 2px;
-      -webkit-appearance: none;
-      -moz-appearance: none;
-      appearance: none;
-      border: 2px solid #555;
-      outline: none;
-      transition: all 0.2s;
-      cursor: pointer;
-      background-color: transparent;
-      vertical-align: middle;
-    }
-    .radio-input {
-      border-radius: 50%;
-    }
-    .checkbox-input {
-      border-radius: 3px;
-    }
-    .radio-input:checked,
-    .checkbox-input:checked {
-      border-color: var(--primary);
-      background-color: var(--primary);
-    }
-    .radio-input:checked::before {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background-color: black;
-    }
-    .checkbox-input:checked::before {
-      content: '✔';
-      position: absolute;
-      color: black;
-      font-size: 10px;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-    }
-    .radio-label,
-    .checkbox-label {
-      font-size: 14px;
-      text-transform: uppercase;
-      margin-top: 1px;
-      color: #ffffff !important;
-    }
-    /* Tooltip styling for question mark icons */
-    .tooltip {
-      font-weight: bold;
-      cursor: help;
-      margin-left: 5px;
-      color: var(--primary);
-      position: relative;
-    }
-    .tooltip:hover::after {
-      content: attr(title);
-      position: absolute;
-      top: 20px;
-      left: 0;
-      background: #333;
-      color: #fff;
-      padding: 2px 5px;
-      border-radius: 3px;
-      white-space: nowrap;
-      z-index: 10;
-    }
-    .file-upload {
-      margin-top: 10px;
-    }
-    .file-btn {
-      display: inline-block;
-      padding: 8px 15px;
-      background-color: #333;
-      color: white;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: all 0.2s;
-      font-size: 14px;
-      text-transform: uppercase;
-    }
-    .file-btn:hover {
-      background-color: #444;
-    }
-    #fileInput {
-      display: none;
-    }
-    .file-list {
-      margin-top: 10px;
-    }
-    .file-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 5px 10px;
-      background-color: rgba(0, 0, 0, 0.2);
-      border-radius: 4px;
-      margin-bottom: 5px;
-    }
-    .file-item-name {
-      font-size: 14px;
-    }
-    .file-delete {
-      background: none;
-      border: none;
-      color: #ff4444;
-      cursor: pointer;
-      font-size: 16px;
-    }
-    .submit-button {
-      padding: 12px 30px;
-      background-color: var(--primary);
-      color: black;
-      border: none;
-      border-radius: 0;
-      cursor: pointer;
-      font-weight: bold;
-      font-size: 16px;
-      text-transform: uppercase;
-      transition: all 0.2s;
-      letter-spacing: 1px;
-      display: inline-block;
-    }
-    .submit-button:hover {
-      background-color: var(--primary-dark);
-    }
-    .submit-button:disabled {
-      background-color: #555;
-      color: #999;
-      cursor: not-allowed;
-    }
-    .back-button {
-      padding: 10px 20px;
-      background-color: #333;
-      color: white;
-      border: none;
-      border-radius: 0;
-      cursor: pointer;
-      font-weight: 500;
-      font-size: 14px;
-      text-transform: uppercase;
-      transition: all 0.2s;
-      letter-spacing: 1px;
-      margin-top: 20px;
-      display: inline-block;
-    }
-    .back-button:hover {
-      background-color: #444;
-    }
-    .navigation {
-      display: flex;
-      justify-content: space-between;
-      margin-top: 20px;
-      margin-bottom: 50px;
-    }
-    .nav-button {
-      padding: 10px 20px;
-      background-color: #333;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-transform: uppercase;
-      font-size: 14px;
-    }
-    .nav-button:hover {
-      background-color: #444;
-    }
-    .nav-button.next {
-      background-color: var(--primary);
-      color: black;
-    }
-    .nav-button.next:hover {
-      background-color: var(--primary-dark);
-    }
-    /* Visual cue for Discord checkbox */
-    .discord-cue {
-      font-size: 12px;
-      color: var(--error);
-      margin-left: 5px;
-    }
-    /* Hide any debug text */
-    body::after,
-    .debug-info {
-      content: none !important;
-      display: none !important;
-    }
-    #debugTextRemover {
-      display: block;
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 30px;
-      background-color: var(--background-dark);
-      z-index: 9999;
-      border-top: 1px solid var(--border);
-    }
-    /* Form error styling */
-    .form-group.error-group input,
-    .form-group.error-group select,
-    .form-group.error-group textarea {
-      border-color: var(--error);
-      box-shadow: 0 0 3px rgba(255, 51, 51, 0.3);
-    }
-    .error-message {
-      color: var(--error);
-      font-size: 13px;
-      margin-top: 5px;
-      display: none;
-      font-weight: bold;
-    }
-    .error {
-      border-color: var(--error) !important;
-    }
-    .checkbox-option.error .checkmark {
-      border-color: var(--error) !important;
-      box-shadow: 0 0 3px rgba(255, 51, 51, 0.3);
-    }
-    /* Help text styling */
-    .help-text {
-      color: #aaa;
-      display: block;
-      margin-top: 5px;
-      font-size: 12px;
-    }
-  </style>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Font imports -->
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div class="container" style="padding-bottom: 70px;">
+  <!-- Loading animation bar -->
+  <div class="loading-animation"></div>
+
+  <div class="container">
+    <!-- Logo container for Vanguard Boost brand asset -->
+    <div class="logo-container">
+      <!-- This SVG can be replaced with your actual logo -->
+      <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="40" stroke="#c4ff00" stroke-width="4" fill="none" />
+        <path d="M30 50 L45 65 L70 35" stroke="#c4ff00" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </div>
+
     <div class="header">
       <h1>Vanguard Boost Application</h1>
-      <p>Thank you for helping us make the future :)</p>
+      <p>Join our elite team of boosters</p>
     </div>
+
     <div class="progress-container">
       <div class="progress-bar">
         <div class="progress-fill" id="progressFill"></div>
@@ -463,6 +40,7 @@
         <div class="step-label">Personal</div>
       </div>
     </div>
+
     <!-- Form starts here -->
     <form
       id="applicationForm"
@@ -470,13 +48,14 @@
       method="POST"
       data-netlify="true"
       netlify-honeypot="bot-field"
-      action="/thank-you.html"
+      action="/submit-form"
     >
       <!-- Hidden fields for Netlify -->
       <input type="hidden" name="form-name" value="applicationForm" />
       <input type="hidden" name="bot-field" />
       <!-- Hidden Application ID -->
       <input type="hidden" name="applicationId" id="applicationId" value="">
+
       <!-- Page 1 -->
       <div class="page active" id="page1">
         <!-- Contact Information Section -->
@@ -488,7 +67,7 @@
               <input type="email" class="form-input" id="email" name="email" required />
             </div>
             <div class="form-group">
-              <label class="form-label required">Discord</label>
+              <label class="form-label required">Discord Handle</label>
               <input type="text" class="form-input" id="discord" name="discord" required />
             </div>
             <div class="form-group">
@@ -504,6 +83,7 @@
             </div>
           </div>
         </div>
+
         <!-- Service Options Section -->
         <div class="section">
           <h2 class="section-title">Service Options</h2>
@@ -543,6 +123,7 @@
             </div>
           </div>
         </div>
+
         <!-- Regions and Services Section -->
         <div class="section">
           <h2 class="section-title">Regions and Services</h2>
@@ -563,37 +144,33 @@
             <div class="checkbox-group">
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="Piloted" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">PILOTED
                   <span class="tooltip" title="Piloted: A professional pre-runs the game/match on your behalf.">?</span>
                 </span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="Self-play" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">SELF-PLAY
                   <span class="tooltip" title="Self-play: You play the game yourself.">?</span>
                 </span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="Coaching" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">COACHING</span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="PvP" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">PVP</span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="services" class="checkbox-input" value="PvE" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">PVE</span>
               </label>
             </div>
             <div class="error-message" id="servicesError">Please select at least one service</div>
           </div>
         </div>
+
         <!-- Platforms Section -->
         <div class="section">
           <h2 class="section-title">Platforms</h2>
@@ -602,23 +179,21 @@
             <div class="checkbox-group">
               <label class="checkbox-option">
                 <input type="checkbox" name="platforms" class="checkbox-input" value="Xbox" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">XBOX</span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="platforms" class="checkbox-input" value="PC" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">PC</span>
               </label>
               <label class="checkbox-option">
                 <input type="checkbox" name="platforms" class="checkbox-input" value="PlayStation" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">PLAYSTATION</span>
               </label>
             </div>
             <div class="error-message" id="platformsError">Please select at least one platform</div>
           </div>
         </div>
+
         <!-- Gaming Experience Section -->
         <div class="section">
           <h2 class="section-title">Gaming Experience</h2>
@@ -635,6 +210,7 @@
             <textarea class="form-textarea" id="experience" name="experience" required></textarea>
           </div>
         </div>
+
         <!-- Verification Section -->
         <div class="section">
           <h2 class="section-title">Verification</h2>
@@ -649,6 +225,7 @@
             <div class="file-list" id="fileList"></div>
           </div>
         </div>
+
         <!-- VPN & Streaming Section -->
         <div class="section">
           <h2 class="section-title">VPN & Streaming</h2>
@@ -664,7 +241,6 @@
                   required
                   value="true"
                 />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">
                   I acknowledge that I will be required to use a VPN.
                 </span>
@@ -685,14 +261,16 @@
             </div>
           </div>
         </div>
+
         <div class="navigation">
           <div></div>
           <button type="button" class="nav-button next" id="nextButton">
-            CONTINUE <span style="margin-left: 5px;">→</span>
+            CONTINUE
           </button>
         </div>
       </div>
       <!-- End of Page 1 -->
+
       <!-- Page 2 -->
       <div class="page" id="page2">
         <!-- Personal Details Section -->
@@ -747,86 +325,87 @@
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label required">Tell us something about yourself</label>
-            <textarea class="form-textarea" id="aboutYourself" name="aboutYourself" placeholder="Add here..." required></textarea>
+            <label class="form-label">Tell us something about yourself</label>
+            <textarea class="form-textarea" id="aboutYourself" name="aboutYourself" placeholder="Add here..."></textarea>
           </div>
         </div>
+
         <!-- Join Discord Section -->
         <div class="section">
           <h2 class="section-title">JOIN VANGUARD BOOST DISCORD</h2>
-          <div style="background-color: rgba(20, 21, 24, 0.8); padding: 20px; border-left: 3px solid var(--primary);">
-            <p style="color: white; margin-bottom: 15px; text-transform: uppercase; font-size: 14px; font-weight: 500;">
+          <div class="section-special">
+            <p>
               YOU ARE INVITED TO JOIN THE RECRUITING DISCORD SERVER.
             </p>
             <div style="display: flex; align-items: center; margin-top: 15px;">
-              <label class="checkbox-option" style="margin: 0; padding-left: 35px; position: relative;">
+              <label class="checkbox-option" style="margin: 0; position: relative;">
                 <input type="checkbox" class="checkbox-input" id="joinedDiscord" name="joinedDiscord" />
-                <span class="checkmark"></span>
                 <span class="checkbox-label">I'VE JOINED THE SERVER.</span>
                 <span class="discord-cue">(Click JOIN NOW first)</span>
               </label>
-              <a href="https://discord.gg/Bz2cqz6GRm" class="submit-button" style="margin-left: 15px; color: black;" target="_blank" id="joinNowButton">
+              <a href="https://discord.gg/Bz2cqz6GRm" class="submit-button" target="_blank" id="joinNowButton">
                 JOIN NOW
               </a>
             </div>
           </div>
         </div>
+
         <!-- Message to Confirm Section -->
         <div class="section">
           <h2 class="section-title">MESSAGE TO CONFIRM</h2>
-          <div>
-            <p style="color: white; margin-bottom: 15px; text-transform: uppercase; font-size: 14px;">
+          <div class="section-special">
+            <p>
               SEND A FRIEND REQUEST TO @VANGUARDRECRUITER ON DISCORD AND NOTIFY THEM OF YOUR SUBMITTED APPLICATION.
             </p>
-            <p style="color: #aaa; margin-bottom: 15px; text-transform: uppercase; font-size: 14px;">
+            <p class="help-text" style="margin-bottom: 15px;">
               EXAMPLE: "HELLO! I'VE JUST SENT AN APPLICATION TO BECOME A BOOSTER."
             </p>
-            <a href="https://discord.gg/Bz2cqz6GRm" style="display: inline-block; float: right; background-color: #333; color: white; padding: 8px 20px; text-decoration: none; transition: all 0.2s; text-transform: uppercase; font-size: 14px;" target="_blank">
+            <a href="https://discord.gg/Bz2cqz6GRm" class="back-button" target="_blank">
               GO TO DISCORD
             </a>
-            <div style="clear: both;"></div>
           </div>
         </div>
+
         <!-- Secure Verification Section -->
         <div class="section">
           <h2 class="section-title">SECURE VERIFICATION</h2>
-          <div style="background-color: rgba(25, 27, 40, 0.8); padding: 20px; border-left: 3px solid var(--primary);">
+          <div class="section-special">
             <label class="checkbox-option">
               <input type="checkbox" class="checkbox-input" id="verification" name="verification" required />
-              <span class="checkmark"></span>
               <span class="checkbox-label"><strong>I AGREE</strong> TO THE THIRD-PARTY VERIFICATION PROCESS</span>
             </label>
             <label class="checkbox-option" style="margin-top: 15px;">
               <input type="checkbox" class="checkbox-input" id="fraudAgreement" name="fraudAgreement" required />
-              <span class="checkmark"></span>
               <span class="checkbox-label">ATTEMPTS AT VERIFICATION FRAUD WILL RESULT IN APPLICATION REJECTION! <strong>I UNDERSTAND AND AGREE.</strong></span>
             </label>
           </div>
         </div>
+
         <!-- Submit Section -->
-        <div style="margin-top: 20px; margin-bottom: 30px; text-align: center; background-color: rgba(0,0,0,0.9); padding: 20px;">
-          <button type="submit" class="submit-button" id="submitButton" disabled>
-            SUBMIT APPLICATION
-          </button>
-          <div class="checkbox-group" style="margin-top: 25px;">
-            <label class="checkbox-option">
-              <input type="checkbox" class="checkbox-input" id="submissionAgreement" name="submissionAgreement" required />
-              <span class="checkmark"></span>
-              <span class="checkbox-label">
-                CLICKING THE "SUBMIT" BUTTON SENDS THE APPLICATION FOR CONSIDERATION, WHICH MAY TAKE UP TO 7 DAYS OR LONGER. IF APPROVED, YOU WILL BE CONTACTED VIA DISCORD. <strong>I'VE READ THIS INFORMATION THOROUGHLY.</strong>
-              </span>
-            </label>
-            <label class="checkbox-option" style="margin-top: 20px;">
-              <input type="checkbox" class="checkbox-input" id="missingInfoAgreement" name="missingInfoAgreement" required />
-              <span class="checkmark"></span>
-              <span class="checkbox-label">
-                IF ANY FORM FIELDS ARE FILLED OUT INCORRECTLY OR MISSING, THE APPLICATION MAY BE DECLINED WITHOUT FURTHER EXPLANATION. <strong>I UNDERSTAND.</strong>
-              </span>
-            </label>
-            <!-- Netlify reCAPTCHA widget -->
-            <div data-netlify-recaptcha="true"></div>
+        <div class="section">
+          <div class="text-center">
+            <button type="submit" class="submit-button" id="submitButton" disabled>
+              SUBMIT APPLICATION
+            </button>
+            <div class="checkbox-group" style="margin-top: 25px;">
+              <label class="checkbox-option">
+                <input type="checkbox" class="checkbox-input" id="submissionAgreement" name="submissionAgreement" required />
+                <span class="checkbox-label">
+                  CLICKING THE "SUBMIT" BUTTON SENDS THE APPLICATION FOR CONSIDERATION, WHICH MAY TAKE UP TO 3 DAYS OR LONGER. IF APPROVED, YOU WILL BE CONTACTED VIA DISCORD. <strong>I'VE READ THIS INFORMATION THOROUGHLY.</strong>
+                </span>
+              </label>
+              <label class="checkbox-option" style="margin-top: 20px;">
+                <input type="checkbox" class="checkbox-input" id="missingInfoAgreement" name="missingInfoAgreement" required />
+                <span class="checkbox-label">
+                  IF ANY FORM FIELDS ARE FILLED OUT INCORRECTLY OR MISSING, THE APPLICATION MAY BE DECLINED WITHOUT FURTHER EXPLANATION. <strong>I UNDERSTAND.</strong>
+                </span>
+              </label>
+              <!-- Netlify reCAPTCHA widget -->
+              <div data-netlify-recaptcha="true"></div>
+            </div>
           </div>
         </div>
+
         <div class="navigation">
           <button type="button" class="back-button" id="backButton">BACK</button>
           <div></div>
@@ -835,16 +414,18 @@
       <!-- End of Page 2 -->
     </form>
   </div>
+
+  <!-- ... existing script ... -->
   <script>
     document.addEventListener("DOMContentLoaded", function () {
       console.log("DOM loaded - initializing form");
-      
+
       // Generate a unique Application ID
       const applicationId = "APP" + Date.now();
       document.getElementById("applicationId").value = applicationId;
-      
+
       const applicationForm = document.getElementById("applicationForm");
-      
+
       // Page elements and navigation
       const page1 = document.getElementById("page1");
       const page2 = document.getElementById("page2");
@@ -854,21 +435,12 @@
       const nextButton = document.getElementById("nextButton");
       const backButton = document.getElementById("backButton");
       const submitButton = document.getElementById("submitButton");
-      
+
       // Initialize submit button as disabled
       if (submitButton) {
         submitButton.disabled = true;
       }
-      
-      // Hide any debug output outside container
-      const debugElements = document.querySelectorAll("body > *:not(.container)");
-      debugElements.forEach(function (element) {
-        if (element.tagName !== "SCRIPT" && element.tagName !== "STYLE") {
-          element.style.display = "none";
-        }
-      });
-      document.querySelector(".container").style.display = "block";
-      
+
       // "JOIN NOW" button & Discord checkbox logic
       const joinedDiscordCheckbox = document.getElementById("joinedDiscord");
       const joinNowButton = document.getElementById("joinNowButton");
@@ -878,7 +450,7 @@
           joinedDiscordCheckbox.disabled = false;
         });
       }
-      
+
       // Game selection dropdown
       const gameSelect = document.getElementById("game");
       const otherGameInput = document.getElementById("otherGameInput");
@@ -887,7 +459,7 @@
           otherGameInput.style.display = (this.value === "Other") ? "block" : "none";
         });
       }
-      
+
       // Availability radio buttons
       const availabilityRadios = document.querySelectorAll('input[name="availability"]');
       const otherAvailabilityInput = document.getElementById("otherAvailabilityInput");
@@ -896,7 +468,7 @@
           otherAvailabilityInput.style.display = (this.value === "Other") ? "block" : "none";
         });
       });
-      
+
       // File upload functionality
       const fileInput = document.getElementById("fileInput");
       const fileList = document.getElementById("fileList");
@@ -951,7 +523,7 @@
           updateFileListUI();
         }
       }
-      
+
       // Page navigation
       if (nextButton) {
         nextButton.addEventListener("click", function () {
@@ -980,7 +552,7 @@
           window.scrollTo(0, 0);
         });
       }
-      
+
       function checkPage2Fields() {
         const requiredInputs = page2.querySelectorAll("input[required], select[required], textarea[required]");
         let allValid = true;
@@ -1029,10 +601,7 @@
         });
       }
       setupErrorClearingBehavior();
-      const debugBlocker = document.createElement("div");
-      debugBlocker.id = "debugTextRemover";
-      document.body.appendChild(debugBlocker);
-      
+
       // Combined submit handler: update IDs, validate page 2, check captcha, and submit
       if (applicationForm) {
         applicationForm.addEventListener("submit", function (e) {
@@ -1043,7 +612,7 @@
             sessionStorage.setItem("applicationId", applicationId);
             console.log("Storing nickname in sessionStorage:", nickname);
           }
-          
+
           if (!validatePage(page2)) {
             e.preventDefault();
             alert("Please fill in all required fields before submitting.");
@@ -1053,20 +622,20 @@
             }
             return false;
           }
-          
+
           const captchaResponse = document.querySelector('[name="g-recaptcha-response"]');
           if (!captchaResponse || captchaResponse.value.trim() === "") {
             e.preventDefault();
             alert("Please complete the captcha.");
             return false;
           }
-          
+
           // Let Netlify handle the form submission - don't preventDefault
           console.log("Form submission validated and proceeding");
           return true;
         });
       }
-      
+
       function validatePage(page) {
         let isValid = true;
         const requiredElements = page.querySelectorAll("input[required], select[required], textarea[required]");
@@ -1125,6 +694,16 @@
             const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailPattern.test(element.value)) {
               isValid = false;
+              highlightError(element, "Please enter a valid email address");
+              return isValid;
+            }
+          }
+          // Validate Bungie ID format (must include the # character)
+          if (element.id === "nickname" && element.value) {
+            if (!element.value.includes('#')) {
+              isValid = false;
+              highlightError(element, "Bungie ID must include the # character (e.g., Username#1234)");
+              return isValid;
             }
           }
         }

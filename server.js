@@ -47,15 +47,30 @@ app.get('/thank-you.html', (req, res) => {
 app.post('/submit-form', (req, res) => {
   console.log('Form submitted:', req.body);
   
+  // Generate a unique application ID if not provided
+  const applicationId = req.body.applicationId || `APP-${Date.now().toString(36)}`;
+  
   // Store form data in Airtable if API key is configured
   if (table) {
     try {
-      table.create({
-        nickname: req.body.nickname,
-        email: req.body.email,
-        discord: req.body.discord,
-        // Add other fields as needed
-      }, function(err, record) {
+      const recordData = {
+        nickname: req.body.nickname || '',
+        email: req.body.email || '',
+        discord: req.body.discord || '',
+        bungieID: req.body.nickname || '',
+        applicationId: applicationId,
+        submissionDate: new Date().toISOString(),
+        verified: false
+      };
+      
+      // Add any additional fields from the form
+      Object.keys(req.body).forEach(key => {
+        if (!recordData[key] && req.body[key]) {
+          recordData[key] = req.body[key];
+        }
+      });
+      
+      table.create(recordData, function(err, record) {
         if (err) {
           console.error('Error saving to Airtable:', err);
         } else {
@@ -67,7 +82,7 @@ app.post('/submit-form', (req, res) => {
     }
   }
   
-  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId || ''));
+  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(applicationId));
 });
 
 // OAuth callback route
@@ -102,10 +117,30 @@ app.get('/callback', async (req, res) => {
     return res.status(400).send("Missing authorization code or state parameter.");
   }
 
-  // Decode the state parameter to get the applicant's nickname
+  // Decode the state parameter to get the applicant's information
   console.log("Raw state parameter:", state);
-  const userNickname = decodeURIComponent(state);
+  let userNickname = '';
+  let applicationId = '';
+  
+  try {
+    // Try to parse state as a JSON object (new format)
+    const stateData = JSON.parse(decodeURIComponent(state));
+    userNickname = stateData.nickname || '';
+    applicationId = stateData.applicationId || '';
+    console.log(`Parsed from JSON - Nickname: ${userNickname}, ApplicationId: ${applicationId}`);
+  } catch (e) {
+    // Fallback for old format where state is just the nickname
+    try {
+      userNickname = decodeURIComponent(state);
+      console.log(`Using legacy format - Nickname: ${userNickname}`);
+    } catch (decodeErr) {
+      console.error('Failed to decode state parameter:', decodeErr);
+      userNickname = state; // Use raw state as last resort
+    }
+  }
+  
   console.log(`Received application nickname: ${userNickname}`);
+  console.log(`Received application ID: ${applicationId}`);
 
   try {
     // Exchange authorization code for an access token
@@ -203,18 +238,48 @@ app.get('/callback', async (req, res) => {
       // Update Airtable record (if found)
       if (table) {
         try {
-          const records = await table.select({
-            filterByFormula: `{nickname} = '${userNickname}'`
-          }).firstPage();
+          let records = [];
+          
+          // First try to find a record by applicationId (most reliable)
+          if (applicationId) {
+            records = await table.select({
+              filterByFormula: `{applicationId} = '${applicationId}'`
+            }).firstPage();
+          }
+          
+          // If no records found by applicationId, try nickname as fallback
+          if (records.length === 0) {
+            records = await table.select({
+              filterByFormula: `OR({nickname} = '${userNickname}', {bungieID} = '${normalizedUserNickname}')`
+            }).firstPage();
+          }
 
           if (records.length > 0) {
             await table.update(records[0].id, {
               verified: true,
-              bungieUsername: fullBungieName
+              bungieUsername: fullBungieName,
+              verificationDate: new Date().toISOString()
             });
             console.log('Airtable record updated successfully.');
           } else {
-            console.warn('No matching Airtable record found for nickname:', userNickname);
+            console.warn('No matching Airtable record found for applicationId or nickname:', applicationId, userNickname);
+            // Try one more time with a substring search
+            try {
+              const fuzzyRecords = await table.select({
+                filterByFormula: `OR(SEARCH('${normalizedUserNickname}', LOWER({nickname})), SEARCH('${normalizedUserNickname}', LOWER({bungieID})))`
+              }).firstPage();
+              
+              if (fuzzyRecords.length > 0) {
+                await table.update(fuzzyRecords[0].id, {
+                  verified: true,
+                  bungieUsername: fullBungieName,
+                  verificationDate: new Date().toISOString()
+                });
+                console.log('Airtable record updated via fuzzy match.');
+              }
+            } catch (fuzzyError) {
+              console.error('Error with fuzzy search:', fuzzyError);
+            }
           }
         } catch (atError) {
           console.error('Error updating Airtable:', atError);
@@ -289,6 +354,12 @@ app.get('/callback', async (req, res) => {
       </html>
     `);
   }
+});
+
+// Handle form submissions from Netlify
+app.get('/success', (req, res) => {
+  console.log('Form submitted successfully via Netlify:', req.query);
+  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.query.applicationId || ''));
 });
 
 // Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Submitted Successfully</title>
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Extract application ID from URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const applicationId = urlParams.get('applicationId') || '';
+    
+    // Redirect to thank-you page with application ID
+    window.location.href = `/thank-you.html?applicationId=${encodeURIComponent(applicationId)}`;
+  </script>
+</head>
+<body>
+  <div class="loading-animation"></div>
+  <div class="container">
+    <div class="center-content">
+      <h1>Form Submitted Successfully</h1>
+      <p>Redirecting to confirmation page...</p>
+    </div>
+  </div>
+</body>
+</html> 

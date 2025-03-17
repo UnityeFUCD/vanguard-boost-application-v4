@@ -4,132 +4,107 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Thank You!</title>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
   <style>
-    /* Basic Reset */
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Arial', sans-serif;
-      background-color: #101114;
-      color: #c4ff00;
-      text-align: center;
-      margin: 0;
-      padding: 0;
-    }
-
-    .container {
-      max-width: 600px;
+    .thank-you-container {
+      max-width: 700px;
       margin: 100px auto;
-      padding: 20px;
+      padding: 40px;
+      background-color: var(--section-bg);
+      border-left: 3px solid var(--primary);
+      position: relative;
+      box-shadow: var(--card-shadow);
     }
 
-    h1 {
-      font-size: 2rem;
-      text-transform: uppercase;
-      margin-bottom: 1rem;
+    .thank-you-container::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: linear-gradient(90deg, var(--primary) 0%, transparent 100%);
     }
 
-    p {
-      font-size: 1.1rem;
-      line-height: 1.6;
-      color: #ffffff;
-      margin-bottom: 1.5rem;
-    }
-
-    .button {
-      display: inline-block;
-      margin-top: 2rem;
-      padding: 12px 24px;
-      background-color: #c4ff00;
-      color: #000;
-      text-decoration: none;
-      font-weight: bold;
-      text-transform: uppercase;
-      border-radius: 4px;
-      transition: background-color 0.2s ease;
-    }
-
-    .button:hover {
-      background-color: #a2d600;
-    }
-
-    .steps {
-      text-align: left;
-      background-color: rgba(0, 0, 0, 0.3);
-      padding: 20px;
-      border-radius: 8px;
-      margin: 30px 0;
-    }
-
-    .steps h2 {
-      text-align: center;
-      margin-bottom: 15px;
-      font-size: 1.3rem;
-    }
-
-    .steps ol {
-      margin-left: 20px;
-      color: #ffffff;
-    }
-
-    .steps li {
-      margin-bottom: 15px;
+    .logo-container {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 30px;
     }
 
     .important {
-      background-color: rgba(196, 255, 0, 0.1);
-      border-left: 4px solid #c4ff00;
-      padding: 10px 15px;
+      background-color: rgba(196, 255, 0, 0.05);
+      border-left: 4px solid var(--primary);
+      padding: 15px;
       margin: 20px 0;
+      position: relative;
     }
 
-    .debug-info {
-      background-color: rgba(0, 0, 0, 0.5);
-      border: 1px solid #333;
-      padding: 10px;
-      margin-top: 30px;
-      text-align: left;
-      display: none;
-    }
-
-    .debug-info pre {
-      color: #aaa;
-      font-family: monospace;
-      font-size: 12px;
-      white-space: pre-wrap;
+    .important::before {
+      content: '!';
+      position: absolute;
+      left: -12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      background-color: var(--primary);
+      color: black;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
     }
   </style>
   <script>
     // For debugging - log when the page loads
     console.log("Thank you page loaded");
-    
-    // Function to get URL parameters
-    function getUrlParam(name) {
-      var urlParams = new URLSearchParams(window.location.search);
-      return urlParams.get(name);
+
+    // Function to safely get items from sessionStorage with fallback to URL parameters
+    function getStoredValue(key, fallbackToURL = true) {
+      try {
+        // Try sessionStorage first
+        const value = sessionStorage.getItem(key);
+        if (value) return value;
+        
+        // If not found and fallback enabled, try URL parameters
+        if (fallbackToURL) {
+          const urlParams = new URLSearchParams(window.location.search);
+          return urlParams.get(key) || '';
+        }
+        return '';
+      } catch (e) {
+        // In case of errors (private browsing, etc.), use URL parameters
+        if (fallbackToURL) {
+          const urlParams = new URLSearchParams(window.location.search);
+          return urlParams.get(key) || '';
+        }
+        return '';
+      }
     }
-    
+
     // When the page loads, update the verification link with the nickname and application ID
     window.onload = function() {
-      // Get nickname from session storage
-      var nickname = sessionStorage.getItem("applicationNickname");
-      console.log("Retrieved nickname from session storage:", nickname);
+      // Extract application ID from URL parameters
+      const urlParams = new URLSearchParams(window.location.search);
+      const appId = urlParams.get('applicationId') || '';
       
-      // Get application ID from URL if available, otherwise from session storage
-      var appId = getUrlParam('applicationId') || sessionStorage.getItem("applicationId");
+      // Get nickname from sessionStorage or try to get from URL
+      const nickname = getStoredValue('applicationNickname') || urlParams.get('nickname') || '';
       
-      // If there's no application ID, generate one
-      if (!appId) {
-        appId = 'APP' + Date.now();
-        sessionStorage.setItem("applicationId", appId);
+      // Store the application ID in sessionStorage as backup
+      try {
+        if (appId) {
+          sessionStorage.setItem('applicationId', appId);
+        }
+      } catch (e) {
+        console.warn('Unable to store in sessionStorage:', e);
       }
       
-      // Make sure we have a nickname, and properly encode it for the state parameter
-      var stateParam = "";
+      // Create a state parameter that includes both nickname and applicationId
+      let stateParam = '';
       if (nickname) {
         // Properly encode the nickname - especially important for characters like #
         stateParam = encodeURIComponent(nickname);
@@ -139,13 +114,21 @@
         stateParam = encodeURIComponent(appId);
         console.log("No nickname found, using appId:", appId);
       }
-      
+
       // Get the verification button
       var verifyButton = document.getElementById('verifyButton');
-      
+
       // Update the href to include the state parameter
       if (verifyButton) {
         var baseUrl = verifyButton.getAttribute('href');
+        // Create a state parameter that includes both nickname and applicationId
+        var stateData = {
+          nickname: nickname || '',
+          applicationId: appId || ''
+        };
+        // Encode the JSON object as the state parameter
+        stateParam = encodeURIComponent(JSON.stringify(stateData));
+        
         // Check if the URL already has a state parameter
         if (baseUrl.includes('state=')) {
           // Replace existing state parameter
@@ -155,17 +138,18 @@
           verifyButton.href = baseUrl + '&state=' + stateParam;
         }
         console.log("Final verification URL:", verifyButton.href);
-        
+
         // For debugging, show the encoded URL in the debug section
         var debugSection = document.getElementById('debugSection');
         var debugContent = document.getElementById('debugContent');
         if (debugSection && debugContent) {
           debugContent.textContent = 'Nickname: ' + nickname + '\n' +
+                                     'Application ID: ' + appId + '\n' +
                                      'Encoded: ' + stateParam + '\n' +
                                      'Verification URL: ' + verifyButton.href;
-          
+
           // Show the debug section in development environments
-          if (window.location.hostname === 'localhost' || 
+          if (window.location.hostname === 'localhost' ||
               window.location.hostname === '127.0.0.1' ||
               window.location.hostname.includes('preview')) {
             debugSection.style.display = 'block';
@@ -176,44 +160,58 @@
   </script>
 </head>
 <body>
+  <!-- Loading animation bar -->
+  <div class="loading-animation"></div>
+
   <div class="container">
-    <h1>Application Received!</h1>
-    <p>
-      Thank you for submitting your application to Vanguard Boost.<br>
-      We have received your information and will review it shortly.
-    </p>
-
-    <div class="steps">
-      <h2>Next Steps:</h2>
-      <ol>
-        <li>Complete Bungie Identity Verification (required)</li>
-        <li>Await review of your application (up to 7 days)</li>
-        <li>If approved, you'll be contacted via Discord</li>
-      </ol>
+    <!-- Logo container for Vanguard Boost brand asset -->
+    <div class="logo-container">
+      <!-- This SVG can be replaced with your actual logo -->
+      <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="40" stroke="#c4ff00" stroke-width="4" fill="none" />
+        <path d="M30 50 L45 65 L70 35" stroke="#c4ff00" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
     </div>
 
-    <div class="important">
-      <p><strong>IMPORTANT:</strong> You must complete the Bungie identity verification to proceed with your application.</p>
-      <p>The Bungie account you use for verification must match EXACTLY what you entered in the "Bungie ID" field of your application (including the # and numbers).</p>
-    </div>
+    <div class="thank-you-container">
+      <h1>Application Received!</h1>
+      <p>
+        Thank you for submitting your application to Vanguard Boost.<br>
+        We have received your information and will review it shortly.
+      </p>
 
-    <!-- URL without scope parameter -->
-    <a
-      id="verifyButton"
-      class="button"
-      href="https://www.bungie.net/en/OAuth/Authorize?client_id=49253&response_type=code&redirect_uri=https%3A%2F%2Fvanguard-bungie-verify-c7de395776dd.herokuapp.com%2Fcallback"
-    >
-      Complete Verification Now
-    </a>
-    
-    <p style="margin-top: 30px; font-size: 0.9rem; color: #888;">
-      If you have any questions, please contact us on Discord.
-    </p>
-    
-    <!-- Debug information section - only visible in development -->
-    <div id="debugSection" class="debug-info">
-      <h3>Debug Information</h3>
-      <pre id="debugContent">Loading...</pre>
+      <div class="steps">
+        <h2>Next Steps:</h2>
+        <ol>
+          <li>Complete Bungie Identity Verification (required)</li>
+          <li>Await review of your application (up to 3 days)</li>
+          <li>If approved, you'll be contacted via Discord</li>
+        </ol>
+      </div>
+
+      <div class="important">
+        <p><strong>IMPORTANT:</strong> You must complete the Bungie identity verification to proceed with your application.</p>
+        <p>The Bungie account you use for verification must match EXACTLY what you entered in the "Bungie ID" field of your application (including the # and numbers).</p>
+      </div>
+
+      <!-- URL with configurable redirect_uri -->
+      <a
+        id="verifyButton"
+        class="submit-button"
+        href="https://www.bungie.net/en/OAuth/Authorize?client_id=49253&response_type=code&redirect_uri=https%3A%2F%2Fvanguard-bungie-verify-c7de395776dd.herokuapp.com%2Fcallback"
+      >
+        Complete Verification Now
+      </a>
+
+      <p style="margin-top: 30px; font-size: 0.9rem; color: var(--text-secondary);">
+        If you have any questions, please contact us on Discord.
+      </p>
+
+      <!-- Debug information section - only visible in development -->
+      <div id="debugSection" class="debug-info">
+        <h3>Debug Information</h3>
+        <pre id="debugContent">Loading...</pre>
+      </div>
     </div>
   </div>
 </body>

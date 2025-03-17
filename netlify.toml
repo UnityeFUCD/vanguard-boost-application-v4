@@ -26,3 +26,7 @@
   skip_processing = false
 [build.processing.html]
   pretty_urls = true
+
+# Form handling settings
+[build.environment]
+  NETLIFY_FORCE_FORM_SUCCESS_URL = "true"

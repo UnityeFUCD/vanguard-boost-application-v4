@@ -48,13 +48,15 @@
       method="POST"
       data-netlify="true"
       netlify-honeypot="bot-field"
-      action="/submit-form"
+      action="/success"
     >
       <!-- Hidden fields for Netlify -->
       <input type="hidden" name="form-name" value="applicationForm" />
       <input type="hidden" name="bot-field" />
       <!-- Hidden Application ID -->
       <input type="hidden" name="applicationId" id="applicationId" value="">
+      <!-- Hidden field for form success redirect -->
+      <input type="hidden" name="success_url" value="/thank-you.html" />
 
       <!-- Page 1 -->
       <div class="page active" id="page1">

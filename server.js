@@ -14,10 +14,12 @@ const SECRET_KEY = process.env.TOKEN_SECRET || 'vanguard-boost-verification-secr
 
 // Track verification attempts (would use Redis in production)
 const verificationAttempts = new Map();
+// Track in-process verifications to prevent concurrent attempts on the same ID
+const verificationLocks = new Map();
 
 // Function to generate a verification token with timestamp for expiry
 function generateVerificationToken(nickname, submissionId, timestamp = Date.now()) {
-  // Normalize inputs for consistency
+  // Normalize and sanitize inputs for consistency
   const normalizedNickname = String(nickname).trim();
   const normalizedSubmissionId = String(submissionId).trim();
   
@@ -39,7 +41,7 @@ function validateVerificationToken(nickname, submissionId, token) {
     // New token format with timestamp
     const [hash, timestamp] = token.split('.');
     
-    // Optional: Check if token is expired (e.g., 48 hours)
+    // Check if token is expired (e.g., 48 hours)
     const now = Date.now();
     if (now - parseInt(timestamp) > 48 * 60 * 60 * 1000) {
       console.log('Token expired');
@@ -56,6 +58,111 @@ function validateVerificationToken(nickname, submissionId, token) {
     return hash === expectedHash;
   } catch (err) {
     console.error('Token validation error:', err);
+    return false;
+  }
+}
+
+// Acquire a lock for verification to prevent race conditions
+async function acquireVerificationLock(id, timeoutMs = 30000) {
+  const lockKey = `lock:${id}`;
+  if (verificationLocks.has(lockKey)) {
+    return false; // Already locked
+  }
+  
+  const lockData = {
+    timestamp: Date.now(),
+    timeout: timeoutMs
+  };
+  
+  verificationLocks.set(lockKey, lockData);
+  
+  // Auto-release lock after timeout
+  setTimeout(() => {
+    if (verificationLocks.has(lockKey) && 
+        verificationLocks.get(lockKey).timestamp === lockData.timestamp) {
+      verificationLocks.delete(lockKey);
+      console.log(`Auto-released lock for ${id} due to timeout`);
+    }
+  }, timeoutMs);
+  
+  return true;
+}
+
+// Release a verification lock
+function releaseVerificationLock(id) {
+  const lockKey = `lock:${id}`;
+  verificationLocks.delete(lockKey);
+}
+
+// Record verification result safely with error handling
+async function recordVerification(submissionId, bungieName, method = 'bungie') {
+  if (!table || !submissionId) return false;
+  
+  // Try to acquire lock first
+  if (!await acquireVerificationLock(submissionId)) {
+    console.log(`Verification already in progress for ${submissionId}`);
+    return false;
+  }
+  
+  try {
+    // Lookup record
+    let record;
+    try {
+      record = await table.find(submissionId);
+    } catch (error) {
+      console.error(`Error finding record ${submissionId}:`, error);
+      releaseVerificationLock(submissionId);
+      return false;
+    }
+    
+    if (!record) {
+      console.warn(`Record not found for ID: ${submissionId}`);
+      releaseVerificationLock(submissionId);
+      return false;
+    }
+    
+    // Check if already verified
+    if (record.get('verified') === true) {
+      console.log(`Record ${submissionId} already verified`);
+      // Update memory cache
+      verificationAttempts.set(`verified:${submissionId}`, {
+        verified: true,
+        timestamp: Date.now(),
+        method,
+        bungieName: bungieName || record.get('bungieUsername')
+      });
+      releaseVerificationLock(submissionId);
+      return true;
+    }
+    
+    // Update record with verification details
+    try {
+      await table.update(record.id, {
+        verified: true,
+        verificationDate: new Date().toISOString(),
+        bungieUsername: bungieName,
+        verificationMethod: method
+      });
+      
+      // Update memory cache
+      verificationAttempts.set(`verified:${submissionId}`, {
+        verified: true,
+        timestamp: Date.now(),
+        method,
+        bungieName
+      });
+      
+      console.log(`Successfully verified record ${submissionId}`);
+      releaseVerificationLock(submissionId);
+      return true;
+    } catch (error) {
+      console.error(`Error updating record ${submissionId}:`, error);
+      releaseVerificationLock(submissionId);
+      return false;
+    }
+  } catch (error) {
+    console.error(`Unexpected error in recordVerification:`, error);
+    releaseVerificationLock(submissionId);
     return false;
   }
 }
@@ -84,6 +191,64 @@ try {
 
 // Bungie API credentials from environment variables
 const { BUNGIE_CLIENT_ID, BUNGIE_CLIENT_SECRET, BUNGIE_API_KEY, REDIRECT_URI } = process.env;
+
+// Add persistent health check for Airtable connection
+let airtableHealthy = !!table; // Initial status based on connection
+const HEALTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
+
+// Health check and reconnection function
+async function checkAirtableHealth() {
+  try {
+    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
+      console.log('Airtable not configured - skipping health check');
+      airtableHealthy = false;
+      return;
+    }
+    
+    if (!table) {
+      // Try to reinitialize
+      try {
+        console.log('Attempting to reinitialize Airtable connection...');
+        const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
+        table = base('Applications');
+        console.log('Airtable connection reinitialized');
+      } catch (error) {
+        console.error('Failed to reinitialize Airtable connection:', error);
+        airtableHealthy = false;
+        return;
+      }
+    }
+    
+    // Perform a small query to confirm connection works
+    const testQuery = await table.select({
+      maxRecords: 1,
+      view: 'Grid view'
+    }).firstPage();
+    
+    airtableHealthy = true;
+    console.log('Airtable connection healthy');
+  } catch (error) {
+    console.error('Airtable health check failed:', error);
+    airtableHealthy = false;
+  }
+}
+
+// Initial health check
+checkAirtableHealth();
+
+// Schedule regular health checks
+setInterval(checkAirtableHealth, HEALTH_CHECK_INTERVAL);
+
+// Add basic error reporting
+process.on('uncaughtException', (error) => {
+  console.error('UNCAUGHT EXCEPTION:', error);
+  // Keep the process running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED PROMISE REJECTION:', reason);
+  // Keep the process running
+});
 
 // Root route - serve the index.html file
 app.get('/', (req, res) => {
@@ -140,6 +305,9 @@ app.post('/submit-form', (req, res) => {
 // OAuth callback route
 app.get('/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
+  
+  // Set default timeout for the request
+  req.setTimeout(60000); // 60 second timeout
 
   // Rate limiting - prevent abuse
   const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
@@ -198,7 +366,7 @@ app.get('/callback', async (req, res) => {
         <body>
           <div class="container">
             <h1>Verification Error</h1>
-            <p>${error_description || error}</p>
+            <p>${escapeHtml(error_description || error)}</p>
             <p>Please try again or contact support if the issue persists.</p>
           </div>
         </body>
@@ -239,6 +407,11 @@ app.get('/callback', async (req, res) => {
     if (stateData.applicationId) applicationId = stateData.applicationId;
     if (stateData.submissionId) submissionId = stateData.submissionId;
     
+    // Sanitize inputs
+    userNickname = escapeHtml(userNickname);
+    applicationId = escapeHtml(applicationId);
+    submissionId = escapeHtml(submissionId);
+    
     console.log("Extracted from state - Nickname:", userNickname);
     console.log("Extracted from state - Application ID:", applicationId);
     console.log("Extracted from state - Submission ID:", submissionId);
@@ -247,20 +420,28 @@ app.get('/callback', async (req, res) => {
     return res.status(400).send("Invalid state parameter.");
   }
   
+  // Determine primary identifier for record lookup
+  let primaryId = submissionId || '';
+  
   // If no submissionId, try to get from applicationId
-  if (!submissionId && applicationId && table) {
+  if (!primaryId && applicationId && table) {
     try {
       const records = await table.select({
-        filterByFormula: `{applicationId} = '${applicationId}'`
+        filterByFormula: `{applicationId} = '${sanitizeForFormula(applicationId)}'`
       }).firstPage();
       
       if (records.length > 0) {
-        submissionId = records[0].id;
-        console.log("Found submissionId from applicationId:", submissionId);
+        primaryId = records[0].id;
+        console.log("Found record ID from applicationId:", primaryId);
       }
     } catch (error) {
       console.error("Error looking up submissionId from applicationId:", error);
     }
+  }
+  
+  // If we still don't have a primary ID, we can't proceed correctly
+  if (!primaryId) {
+    console.error("No primary ID found for verification");
   }
   
   console.log(`Received application nickname: ${userNickname}`);
@@ -268,66 +449,89 @@ app.get('/callback', async (req, res) => {
   console.log(`Received submission ID: ${submissionId}`);
 
   try {
-    // Exchange authorization code for an access token
-    console.log('Exchanging code for access token...');
-    const tokenResponse = await axios.post(
-      'https://www.bungie.net/platform/app/oauth/token/',
-      `grant_type=authorization_code&code=${code}&client_id=${BUNGIE_CLIENT_ID}&client_secret=${BUNGIE_CLIENT_SECRET}`,
+    // Exchange the authorization code for an access token
+    // Set up API request timeout to prevent hanging
+    const axiosWithTimeout = axios.create({
+      timeout: 30000 // 30 second timeout
+    });
+    
+    const tokenResponse = await axiosWithTimeout.post('https://www.bungie.net/platform/app/oauth/token/', 
+      `grant_type=authorization_code&code=${code}&client_id=${BUNGIE_CLIENT_ID}`,
       {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'X-API-Key': BUNGIE_API_KEY
+          'Content-Type': 'application/x-www-form-urlencoded'
         }
       }
     );
-
-    const { access_token, token_type } = tokenResponse.data;
-    if (!access_token) {
-      console.error('Access token not found in response:', tokenResponse.data);
-      throw new Error('Failed to obtain access token');
+    
+    if (!tokenResponse.data || !tokenResponse.data.access_token) {
+      console.error('No access token returned from Bungie API');
+      return res.status(500).send(`
+        <html>
+          <head>
+            <title>Verification Error</title>
+            <style>
+              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+              h1 { color: #ff3e3e; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Verification Error</h1>
+              <p>Failed to get access token from Bungie. Please try again.</p>
+            </div>
+          </body>
+        </html>
+      `);
     }
-    console.log('Access token obtained. Fetching user info from Bungie...');
-
-    // Retrieve Bungie user info using the access token
-    const userResponse = await axios.get(
-      'https://www.bungie.net/platform/User/GetMembershipsForCurrentUser/',
-      {
-        headers: {
-          'Authorization': `${token_type} ${access_token}`,
-          'X-API-Key': BUNGIE_API_KEY
-        }
+    
+    const accessToken = tokenResponse.data.access_token;
+    
+    // Fetch the user's Bungie profile
+    const userResponse = await axiosWithTimeout.get('https://www.bungie.net/Platform/User/GetCurrentBungieNetUser/', {
+      headers: {
+        'X-API-Key': BUNGIE_API_KEY,
+        'Authorization': `Bearer ${accessToken}`
       }
-    );
-    console.log('Bungie user info received.');
-
-    // Extract the Bungie display name and unique code
-    let bungieUsername = null;
-    let bungieCode = null;
-    let fullBungieName = null;
-
+    }).catch(error => {
+      console.error('Failed to fetch user profile:', error.message);
+      if (error.response) {
+        console.error('Error response:', error.response.data);
+      }
+      throw new Error('Failed to fetch user profile from Bungie API');
+    });
+    
+    let bungieUsername = '';
+    let bungieCode = '';
+    let fullBungieName = '';
+    
     if (userResponse.data && userResponse.data.Response && userResponse.data.Response.bungieNetUser) {
       bungieUsername = userResponse.data.Response.bungieNetUser.displayName;
-
+      
       if (userResponse.data.Response.bungieNetUser.uniqueName) {
         const parts = userResponse.data.Response.bungieNetUser.uniqueName.split('#');
         if (parts.length > 1) {
           bungieCode = parts[1];
         }
       }
-
+      
       // Fallback if uniqueName doesn't provide the code
       if (!bungieCode && userResponse.data.Response.bungieNetUser.cachedBungieGlobalDisplayNameCode !== undefined) {
         bungieCode = userResponse.data.Response.bungieNetUser.cachedBungieGlobalDisplayNameCode;
       }
-
+      
       if (bungieUsername) {
         fullBungieName = bungieCode ? `${bungieUsername}#${bungieCode}` : bungieUsername;
       }
     }
-
+    
+    // Sanitize the Bungie name for safety
+    fullBungieName = escapeHtml(fullBungieName);
+    
     console.log(`Bungie username: ${fullBungieName}`);
     console.log(`Application nickname: ${userNickname}`);
-
+    
     if (!fullBungieName) {
       console.error('Error: Bungie username not retrieved.');
       return res.status(400).send(`
@@ -395,88 +599,18 @@ app.get('/callback', async (req, res) => {
     if (matched) {
       console.log(`Match found: Exact: ${exactMatch}, NameOnly: ${nameOnlyMatch}, Sanitized: ${sanitizedMatch}`);
 
-      // Update Airtable record (if found)
-      if (table) {
-        let recordsToUpdate = [];
-        
-        try {
-          // First try to look up by submissionId (most reliable)
-          if (submissionId) {
-            const recordById = await table.find(submissionId).catch(e => null);
-            if (recordById) {
-              recordsToUpdate.push(recordById);
-            }
-          }
-          
-          // If no record found by submissionId, try applicationId
-          if (recordsToUpdate.length === 0 && applicationId) {
-            const recordsByAppId = await table.select({
-              filterByFormula: `{applicationId} = '${applicationId}'`
-            }).firstPage();
-            
-            if (recordsByAppId.length > 0) {
-              recordsToUpdate = recordsByAppId;
-            }
-          }
-          
-          // Last resort: try to find by nickname
-          if (recordsToUpdate.length === 0) {
-            const normalizedNickname = userNickname.toLowerCase().trim();
-            const recordsByName = await table.select({
-              filterByFormula: `LOWER({nickname}) = '${normalizedNickname}'`
-            }).firstPage();
-            
-            if (recordsByName.length > 0) {
-              // Security check: If multiple records found with the same nickname,
-              // only use the oldest record to prevent impersonation
-              if (recordsByName.length > 1) {
-                console.warn(`Multiple records found with nickname ${normalizedNickname}. Using oldest record only.`);
-                
-                // Sort by creation date (oldest first)
-                recordsByName.sort((a, b) => {
-                  const dateA = new Date(a.get('submissionDate') || 0);
-                  const dateB = new Date(b.get('submissionDate') || 0);
-                  return dateA - dateB;
-                });
-                
-                // Flag other records as potential impersonation attempts
-                for (let i = 1; i < recordsByName.length; i++) {
-                  await table.update(recordsByName[i].id, {
-                    securityFlag: 'Potential impersonation attempt',
-                    flaggedDate: new Date().toISOString()
-                  });
-                }
-                
-                recordsToUpdate.push(recordsByName[0]);
-              } else {
-                // Just one record found
-                recordsToUpdate.push(recordsByName[0]);
-              }
-            }
-          }
-          
-          // Update all matching records (should usually be just one)
-          for (const record of recordsToUpdate) {
-            await table.update(record.id, {
-              verified: true,
-              verificationDate: new Date().toISOString(),
-              bungieUsername: fullBungieName,
-              verificationMethod: 'bungie'
-            });
-            
-            // Store in memory verification status (temporary, would use Redis/DB in production)
-            verificationAttempts.set(`verified:${record.id}`, {
-              verified: true,
-              timestamp: Date.now(),
-              method: 'bungie',
-              bungieName: fullBungieName
-            });
-            
-            console.log(`Updated Airtable record: ${record.id}`);
-          }
-        } catch (error) {
-          console.error('Error updating Airtable record:', error);
-        }
+      // Use the transaction-safe recordVerification function
+      const verificationSuccess = await recordVerification(primaryId, fullBungieName, 'bungie');
+      
+      if (!verificationSuccess && !table) {
+        console.warn('Verification recorded only in memory - Airtable not configured');
+        // Store in memory verification status (temporary, would use Redis/DB in production)
+        verificationAttempts.set(`verified:${primaryId}`, {
+          verified: true,
+          timestamp: Date.now(),
+          method: 'bungie',
+          bungieName: fullBungieName
+        });
       }
 
       return res.send(`
@@ -494,53 +628,52 @@ app.get('/callback', async (req, res) => {
             <div class="container">
               <div class="success-icon">✓</div>
               <h1>Verification Successful!</h1>
-              <p>Your Bungie account (<strong>${fullBungieName}</strong>) has been verified.</p>
+              <p>Your Bungie account (<strong>${escapeHtml(fullBungieName)}</strong>) has been verified.</p>
               <p>You may now close this window and return to Discord.</p>
             </div>
           </body>
         </html>
       `);
-    } else {
-      console.log('Username verification failed - Bungie ID must match EXACTLY what was entered in the form');
-      return res.status(400).send(`
-        <html>
-          <head>
-            <title>Verification Failed</title>
-            <style>
-              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-              h1 { color: #ff3e3e; }
-              .details { text-align: left; background: rgba(255,62,62,0.1); padding: 15px; border-radius: 5px; margin-top: 20px; }
-              .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
-              .buttons { margin-top: 25px; }
-              .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin: 0 10px; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <h1>Verification Failed</h1>
-              <div class="details">
-                <p><strong>Your Bungie Account:</strong> ${fullBungieName}</p>
-                <p><strong>Application Nickname:</strong> ${userNickname}</p>
-              </div>
-              <div class="suggestion">
-                <p><strong>Common Issues:</strong></p>
-                <ul style="text-align: left;">
-                  <li>Exact character matching - ensure the Bungie ID is exactly the same</li>
-                  <li>Double-check the # code numbers after your name</li>
-                  <li>Watch for spaces or special characters</li>
-                </ul>
-              </div>
-              <p>Please ensure you're using the same Bungie account as you entered in your application.</p>
-              <div class="buttons">
-                <a href="/email-verify?nickname=${encodeURIComponent(fullBungieName)}&submissionId=${encodeURIComponent(submissionId)}&token=${encodeURIComponent(generateVerificationToken(fullBungieName, submissionId))}" class="btn">Try with Current Bungie ID</a>
-                <a href="javascript:history.back()" class="btn" style="background-color: #333; color: #fff;">Go Back</a>
-              </div>
-            </div>
-          </body>
-        </html>
-      `);
     }
+    console.log('Username verification failed - Bungie ID must match EXACTLY what was entered in the form');
+    return res.status(400).send(`
+      <html>
+        <head>
+          <title>Verification Failed</title>
+          <style>
+            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+            h1 { color: #ff3e3e; }
+            .details { text-align: left; background: rgba(255,62,62,0.1); padding: 15px; border-radius: 5px; margin-top: 20px; }
+            .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
+            .buttons { margin-top: 25px; }
+            .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin: 0 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Verification Failed</h1>
+            <div class="details">
+              <p><strong>Your Bungie Account:</strong> ${escapeHtml(fullBungieName)}</p>
+              <p><strong>Application Nickname:</strong> ${escapeHtml(userNickname)}</p>
+            </div>
+            <div class="suggestion">
+              <p><strong>Common Issues:</strong></p>
+              <ul style="text-align: left;">
+                <li>Exact character matching - ensure the Bungie ID is exactly the same</li>
+                <li>Double-check the # code numbers after your name</li>
+                <li>Watch for spaces or special characters</li>
+              </ul>
+            </div>
+            <p>Please ensure you're using the same Bungie account as you entered in your application.</p>
+            <div class="buttons">
+              <a href="/email-verify?nickname=${encodeURIComponent(fullBungieName)}&submissionId=${encodeURIComponent(primaryId)}&token=${encodeURIComponent(generateVerificationToken(fullBungieName, primaryId))}" class="btn">Try with Current Bungie ID</a>
+              <a href="javascript:history.back()" class="btn" style="background-color: #333; color: #fff;">Go Back</a>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
   } catch (err) {
     console.error('Error during verification:', err);
     return res.status(500).send(`
@@ -1027,6 +1160,45 @@ app.get('/generate-email-link', (req, res) => {
     </html>
   `);
 });
+
+// Utility functions for security
+
+// Sanitize input for Airtable formula queries
+function sanitizeForFormula(input) {
+  if (!input) return '';
+  // Escape single quotes and other special characters
+  return String(input)
+    .replace(/'/g, "\\'")
+    .replace(/\\/g, "\\\\")
+    .trim();
+}
+
+// Escape HTML to prevent XSS
+function escapeHtml(unsafe) {
+  if (!unsafe) return '';
+  return String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Memory cleanup for verification attempts (run periodically)
+const CLEANUP_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
+setInterval(() => {
+  const now = Date.now();
+  const expiryTime = 48 * 60 * 60 * 1000; // 48 hours
+  
+  // Clean up old verification attempts
+  for (const [key, data] of verificationAttempts.entries()) {
+    if (data.timestamp && now - data.timestamp > expiryTime) {
+      verificationAttempts.delete(key);
+    }
+  }
+  
+  console.log(`Cleaned up verification attempts map. Current size: ${verificationAttempts.size}`);
+}, CLEANUP_INTERVAL);
 
 // Start the server
 app.listen(PORT, () => {

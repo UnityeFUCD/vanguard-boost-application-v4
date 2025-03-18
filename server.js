@@ -427,7 +427,31 @@ app.get('/callback', async (req, res) => {
             }).firstPage();
             
             if (recordsByName.length > 0) {
-              recordsToUpdate = recordsByName;
+              // Security check: If multiple records found with the same nickname,
+              // only use the oldest record to prevent impersonation
+              if (recordsByName.length > 1) {
+                console.warn(`Multiple records found with nickname ${normalizedNickname}. Using oldest record only.`);
+                
+                // Sort by creation date (oldest first)
+                recordsByName.sort((a, b) => {
+                  const dateA = new Date(a.get('submissionDate') || 0);
+                  const dateB = new Date(b.get('submissionDate') || 0);
+                  return dateA - dateB;
+                });
+                
+                // Flag other records as potential impersonation attempts
+                for (let i = 1; i < recordsByName.length; i++) {
+                  await table.update(recordsByName[i].id, {
+                    securityFlag: 'Potential impersonation attempt',
+                    flaggedDate: new Date().toISOString()
+                  });
+                }
+                
+                recordsToUpdate.push(recordsByName[0]);
+              } else {
+                // Just one record found
+                recordsToUpdate.push(recordsByName[0]);
+              }
             }
           }
           
@@ -551,27 +575,92 @@ app.get('/success', (req, res) => {
 app.get('/email-verify', async (req, res) => {
   const { nickname, submissionId, token } = req.query;
   
-  // Rate limiting
-  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-  const ipKey = `ip:${clientIp}`;
-  
-  // Basic rate limiting
-  if (!verificationAttempts.has(ipKey)) {
-    verificationAttempts.set(ipKey, { count: 1, timestamp: Date.now() });
-  } else {
-    const attempt = verificationAttempts.get(ipKey);
-    const now = Date.now();
+  // First, immediately show a loading screen while we process
+  res.write(`
+    <html>
+      <head>
+        <title>Verifying Your Identity</title>
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+          .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+          h1 { color: #c4ff00; }
+          .loader { 
+            border: 5px solid rgba(0,0,0,0.3);
+            border-top: 5px solid #c4ff00;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        </style>
+        <script>
+          // This prevents the "loading" page from being stored in browser history
+          window.history.replaceState(null, document.title, window.location.href);
+        </script>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Verifying Your Identity</h1>
+          <div class="loader"></div>
+          <p>Please wait while we verify your Bungie identity...</p>
+        </div>
+      </body>
+    </html>
+  `);
+
+  // Process verification after showing loading screen
+  try {
+    // Rate limiting
+    const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const ipKey = `ip:${clientIp}`;
     
-    // Reset counter after 1 hour
-    if (now - attempt.timestamp > 60 * 60 * 1000) {
-      verificationAttempts.set(ipKey, { count: 1, timestamp: now });
-    } else if (attempt.count > 10) {
-      // Too many attempts
-      console.warn(`Rate limit exceeded for IP: ${clientIp}`);
-      return res.status(429).send(`
+    // Basic rate limiting
+    if (!verificationAttempts.has(ipKey)) {
+      verificationAttempts.set(ipKey, { count: 1, timestamp: Date.now() });
+    } else {
+      const attempt = verificationAttempts.get(ipKey);
+      const now = Date.now();
+      
+      // Reset counter after 1 hour
+      if (now - attempt.timestamp > 60 * 60 * 1000) {
+        verificationAttempts.set(ipKey, { count: 1, timestamp: now });
+      } else if (attempt.count > 10) {
+        // Too many attempts
+        console.warn(`Rate limit exceeded for IP: ${clientIp}`);
+        return finishResponse(res, `
+          <html>
+            <head>
+              <title>Too Many Attempts</title>
+              <style>
+                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                h1 { color: #ff3e3e; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <h1>Too Many Verification Attempts</h1>
+                <p>Please wait a while before trying again.</p>
+              </div>
+            </body>
+          </html>
+        `);
+      } else {
+        attempt.count++;
+        verificationAttempts.set(ipKey, attempt);
+      }
+    }
+    
+    if (!nickname || !submissionId || !token) {
+      return finishResponse(res, `
         <html>
           <head>
-            <title>Too Many Attempts</title>
+            <title>Verification Error</title>
             <style>
               body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
               .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
@@ -580,103 +669,177 @@ app.get('/email-verify', async (req, res) => {
           </head>
           <body>
             <div class="container">
-              <h1>Too Many Verification Attempts</h1>
-              <p>Please wait a while before trying again.</p>
+              <h1>Verification Error</h1>
+              <p>Missing required verification parameters.</p>
+              <p>Please use the link provided in your email or contact support.</p>
             </div>
           </body>
         </html>
       `);
-    } else {
-      attempt.count++;
-      verificationAttempts.set(ipKey, attempt);
     }
-  }
-  
-  if (!nickname || !submissionId || !token) {
-    return res.status(400).send(`
-      <html>
-        <head>
-          <title>Verification Error</title>
-          <style>
-            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-            h1 { color: #ff3e3e; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Verification Error</h1>
-            <p>Missing required verification parameters.</p>
-            <p>Please use the link provided in your email or contact support.</p>
-          </div>
-        </body>
-      </html>
-    `);
-  }
-  
-  // Check if already verified (in memory cache)
-  const verificationKey = `verified:${submissionId}`;
-  if (verificationAttempts.has(verificationKey)) {
-    const verification = verificationAttempts.get(verificationKey);
-    if (verification.verified) {
-      return res.send(`
+    
+    // Check if already verified (in memory cache)
+    const verificationKey = `verified:${submissionId}`;
+    if (verificationAttempts.has(verificationKey)) {
+      const verification = verificationAttempts.get(verificationKey);
+      if (verification.verified) {
+        return finishResponse(res, `
+          <html>
+            <head>
+              <title>Already Verified</title>
+              <style>
+                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                h1 { color: #c4ff00; }
+                .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <div class="success-icon">✓</div>
+                <h1>Already Verified</h1>
+                <p>Your Bungie identity <strong>(${verification.bungieName || nickname})</strong> has already been verified successfully.</p>
+                <p>No further action is needed. Your application is being reviewed by our team.</p>
+              </div>
+            </body>
+          </html>
+        `);
+      }
+    }
+    
+    // Validate the token
+    if (!validateVerificationToken(nickname, submissionId, token)) {
+      console.warn('Invalid token:', token);
+      
+      // Try to help the user - STRICT: Only lookup by submissionId
+      if (table && submissionId) {
+        try {
+          // Try to find the record ONLY by submissionId - no nickname lookups for security
+          let recordFound = null;
+          try {
+            recordFound = await table.find(submissionId).catch(e => null);
+          } catch (e) {
+            // Not a valid record ID format
+            console.warn('Invalid submission ID format:', submissionId);
+          }
+          
+          if (recordFound) {
+            // Check if already verified
+            if (recordFound.get('verified') === true) {
+              // Already verified - show success message
+              return finishResponse(res, `
+                <html>
+                  <head>
+                    <title>Already Verified</title>
+                    <style>
+                      body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                      .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                      h1 { color: #c4ff00; }
+                      .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
+                    </style>
+                  </head>
+                  <body>
+                    <div class="container">
+                      <div class="success-icon">✓</div>
+                      <h1>Already Verified</h1>
+                      <p>Your Bungie identity <strong>(${recordFound.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
+                      <p>No further action is needed. Your application is being reviewed by our team.</p>
+                    </div>
+                  </body>
+                </html>
+              `);
+            }
+            
+            // Record exists but needs verification - generate new token and provide link
+            const recordId = recordFound.id;
+            const storedNickname = recordFound.get('nickname');
+            const newToken = generateVerificationToken(storedNickname, recordId);
+            
+            return finishResponse(res, `
+              <html>
+                <head>
+                  <title>Verification Token Error</title>
+                  <style>
+                    body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                    .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                    h1 { color: #ff3e3e; }
+                    .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; font-weight: bold; }
+                  </style>
+                </head>
+                <body>
+                  <div class="container">
+                    <h1>Verification Token Error</h1>
+                    <p>The verification link you used appears to be invalid or expired.</p>
+                    <p>We found your application, but the security token doesn't match.</p>
+                    <p>Please use the updated link below:</p>
+                    <a href="/email-verify?nickname=${encodeURIComponent(storedNickname)}&submissionId=${encodeURIComponent(recordId)}&token=${encodeURIComponent(newToken)}" class="btn">USE UPDATED VERIFICATION LINK</a>
+                  </div>
+                </body>
+              </html>
+            `);
+          }
+        } catch (error) {
+          console.error('Error checking verification in Airtable:', error);
+        }
+      }
+      
+      // If we get here, no record found or other error - show generic error
+      return finishResponse(res, `
         <html>
           <head>
-            <title>Already Verified</title>
+            <title>Verification Error</title>
             <style>
               body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
               .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-              h1 { color: #c4ff00; }
-              .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
+              h1 { color: #ff3e3e; }
             </style>
           </head>
           <body>
             <div class="container">
-              <div class="success-icon">✓</div>
-              <h1>Already Verified</h1>
-              <p>Your Bungie identity <strong>(${verification.bungieName || nickname})</strong> has already been verified successfully.</p>
-              <p>No further action is needed. Your application is being reviewed by our team.</p>
+              <h1>Verification Error</h1>
+              <p>Invalid verification token.</p>
+              <p>Please use the link provided in your email or contact support.</p>
             </div>
           </body>
         </html>
       `);
     }
-  }
-  
-  // Validate the token
-  if (!validateVerificationToken(nickname, submissionId, token)) {
-    console.warn('Invalid token:', token);
     
-    // Try to help the user by checking Airtable
-    if (table) {
+    // Final check with Airtable (token is valid at this point) - STRICT: Only lookup by submissionId
+    if (table && submissionId) {
       try {
-        // Try to find the record
         let recordFound = null;
-        if (submissionId) {
-          try {
-            recordFound = await table.find(submissionId).catch(e => null);
-          } catch (e) {
-            // Likely not a valid record ID format, continue with other lookup methods
-          }
-        }
         
-        // If not found by ID, try by nickname
-        if (!recordFound) {
-          const normalizedNickname = String(nickname).toLowerCase().trim();
-          const records = await table.select({
-            filterByFormula: `LOWER({nickname}) = '${normalizedNickname}'`
-          }).firstPage();
-          
-          if (records.length > 0) {
-            recordFound = records[0];
-          }
+        // Try to find by submissionId only - direct lookup
+        try {
+          recordFound = await table.find(submissionId).catch(e => null);
+        } catch (e) {
+          // Not a valid record ID format - handle this case explicitly
+          return finishResponse(res, `
+            <html>
+              <head>
+                <title>Verification Error</title>
+                <style>
+                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                  h1 { color: #ff3e3e; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <h1>Verification Error</h1>
+                  <p>Invalid submission ID format.</p>
+                  <p>Please use the exact link provided in your email.</p>
+                </div>
+              </body>
+            </html>
+          `);
         }
         
         if (recordFound) {
-          // Check if already verified
+          // If already verified, show success message
           if (recordFound.get('verified') === true) {
-            // Already verified - show success message
-            return res.send(`
+            return finishResponse(res, `
               <html>
                 <head>
                   <title>Already Verified</title>
@@ -698,42 +861,72 @@ app.get('/email-verify', async (req, res) => {
               </html>
             `);
           }
-          
-          // Record exists but needs verification - generate new token and provide link
-          const recordId = recordFound.id;
-          const storedNickname = recordFound.get('nickname');
-          const newToken = generateVerificationToken(storedNickname, recordId);
-          
-          return res.status(403).send(`
+        } else {
+          // No record found with this submissionId, but token is valid - show clear error
+          return finishResponse(res, `
             <html>
               <head>
-                <title>Verification Token Error</title>
+                <title>Verification Error</title>
                 <style>
                   body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                   h1 { color: #ff3e3e; }
-                  .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; font-weight: bold; }
+                  .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
                 </style>
               </head>
               <body>
                 <div class="container">
-                  <h1>Verification Token Error</h1>
-                  <p>The verification link you used appears to be invalid or expired.</p>
-                  <p>We found your application, but the security token doesn't match.</p>
-                  <p>Please use the updated link below:</p>
-                  <a href="/email-verify?nickname=${encodeURIComponent(storedNickname)}&submissionId=${encodeURIComponent(recordId)}&token=${encodeURIComponent(newToken)}" class="btn">USE UPDATED VERIFICATION LINK</a>
+                  <h1>Verification Error</h1>
+                  <p>We couldn't find your application record with ID: <strong>${submissionId}</strong></p>
+                  <div class="suggestion">
+                    <p><strong>Possible Solutions:</strong></p>
+                    <ul style="text-align: left;">
+                      <li>Ensure you've submitted your application</li>
+                      <li>Try again later - sometimes database updates take a moment</li>
+                      <li>Contact support if you continue having problems</li>
+                    </ul>
+                  </div>
                 </div>
               </body>
             </html>
           `);
         }
       } catch (error) {
-        console.error('Error checking verification in Airtable:', error);
+        console.error('Error checking verification status:', error);
+        return finishResponse(res, `
+          <html>
+            <head>
+              <title>Verification Error</title>
+              <style>
+                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                h1 { color: #ff3e3e; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <h1>Verification Error</h1>
+                <p>An error occurred while checking your verification status.</p>
+                <p>Please try again later or contact support.</p>
+              </div>
+            </body>
+          </html>
+        `);
       }
     }
     
-    // If we get here, no record found or other error - show generic error
-    return res.status(403).send(`
+    // If we got here, the token is valid but we need to redirect to Bungie OAuth for verification
+    const state = encodeURIComponent(JSON.stringify({
+      nickname,
+      submissionId
+    }));
+    
+    const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
+    
+    return finishResponse(res, null, authUrl);
+  } catch (error) {
+    console.error('Unexpected error in email verification:', error);
+    return finishResponse(res, `
       <html>
         <head>
           <title>Verification Error</title>
@@ -746,109 +939,36 @@ app.get('/email-verify', async (req, res) => {
         <body>
           <div class="container">
             <h1>Verification Error</h1>
-            <p>Invalid verification token.</p>
-            <p>Please use the link provided in your email or contact support.</p>
+            <p>An unexpected error occurred during verification.</p>
+            <p>Please try again later or contact support.</p>
           </div>
         </body>
       </html>
     `);
   }
-  
-  // Final check with Airtable (token is valid at this point)
-  if (table) {
-    try {
-      let recordFound = null;
-      
-      // Try to find by submissionId first (direct lookup)
-      if (submissionId) {
-        try {
-          recordFound = await table.find(submissionId).catch(e => null);
-        } catch (e) {
-          // Not a valid record ID format, continue with query
-        }
-      }
-      
-      // If not found directly, try query
-      if (!recordFound) {
-        const records = await table.select({
-          filterByFormula: `OR({submissionId} = '${submissionId}', LOWER({nickname}) = '${String(nickname).toLowerCase().trim()}')`
-        }).firstPage();
-        
-        if (records.length > 0) {
-          recordFound = records[0];
-        }
-      }
-      
-      if (recordFound) {
-        // If already verified, show success message
-        if (recordFound.get('verified') === true) {
-          return res.send(`
-            <html>
-              <head>
-                <title>Already Verified</title>
-                <style>
-                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                  h1 { color: #c4ff00; }
-                  .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
-                </style>
-              </head>
-              <body>
-                <div class="container">
-                  <div class="success-icon">✓</div>
-                  <h1>Already Verified</h1>
-                  <p>Your Bungie identity <strong>(${recordFound.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
-                  <p>No further action is needed. Your application is being reviewed by our team.</p>
-                </div>
-              </body>
-            </html>
-          `);
-        }
-      } else {
-        // No record found with this submissionId, but token is valid - strange case
-        return res.send(`
-          <html>
-            <head>
-              <title>Verification Error</title>
-              <style>
-                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                h1 { color: #ff3e3e; }
-                .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <h1>Verification Error</h1>
-                <p>We couldn't find your application record with ID: <strong>${submissionId}</strong></p>
-                <div class="suggestion">
-                  <p><strong>Possible Solutions:</strong></p>
-                  <ul style="text-align: left;">
-                    <li>Your token is valid but we can't find your record - try submitting your application again</li>
-                    <li>The database might be experiencing issues - try again later</li>
-                    <li>Contact support if you continue having problems</li>
-                  </ul>
-                </div>
-              </div>
-            </body>
-          </html>
-        `);
-      }
-    } catch (error) {
-      console.error('Error checking verification status:', error);
-    }
-  }
-  
-  // If we got here, the user needs to verify - redirect to Bungie OAuth
-  const state = encodeURIComponent(JSON.stringify({
-    nickname,
-    submissionId
-  }));
-  
-  const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
-  
-  res.redirect(authUrl);
 });
+
+// Helper function to finish streaming response
+function finishResponse(res, html, redirectUrl = null) {
+  if (!res.headersSent) {
+    if (redirectUrl) {
+      return res.redirect(redirectUrl);
+    } else {
+      return res.send(html);
+    }
+  } else {
+    // For streaming responses where headers were already sent
+    res.write(`
+      <script>
+        document.open();
+        document.write(\`${html.replace(/`/g, '\\`')}\`);
+        document.close();
+        ${redirectUrl ? `window.location.href = "${redirectUrl}";` : ''}
+      </script>
+    `);
+    return res.end();
+  }
+}
 
 // Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work
 app.post('/', (req, res) => {
@@ -859,6 +979,16 @@ app.post('/', (req, res) => {
 // Development utility route to generate verification links (should be disabled in production)
 app.get('/generate-email-link', (req, res) => {
   const { nickname, submissionId } = req.query;
+  
+  // In production, this endpoint should be disabled or require authentication
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction) {
+    const randomDelay = Math.floor(Math.random() * 2000) + 500; // Random delay between 500-2500ms
+    setTimeout(() => {
+      return res.status(404).send('Not found');
+    }, randomDelay);
+    return;
+  }
   
   if (!nickname || !submissionId) {
     return res.status(400).send('Missing required parameters: nickname and submissionId');

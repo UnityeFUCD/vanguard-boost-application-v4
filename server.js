@@ -276,15 +276,30 @@ app.get('/callback', async (req, res) => {
       }
     }
     
+    // Normalize by removing spaces, converting to lowercase, and controlling for common variations
     const normalizedUserNickname = String(nicknameForComparison).toLowerCase().trim();
-
+    
+    // Prepare sanitized versions for more forgiving comparison (remove spaces, special chars)
+    const sanitizedBungieName = normalizedBungieName.replace(/\s+/g, '').replace(/#/g, '');
+    const sanitizedUserNickname = normalizedUserNickname.replace(/\s+/g, '').replace(/#/g, '');
+    
     console.log(`Comparing normalized values: "${normalizedBungieName}" vs. "${normalizedUserNickname}"`);
+    console.log(`Sanitized values: "${sanitizedBungieName}" vs. "${sanitizedUserNickname}"`);
 
-    // ONLY do exact matching - nothing else is acceptable
-    const matched = normalizedBungieName === normalizedUserNickname;
+    // Try multiple comparison strategies
+    // 1. Exact match (preferred)
+    // 2. Match without the #code part
+    // 3. Sanitized match (most lenient)
+    const exactMatch = normalizedBungieName === normalizedUserNickname;
+    const nameOnlyMatch = normalizedBungieName.split('#')[0] === normalizedUserNickname.split('#')[0];
+    const sanitizedMatch = sanitizedBungieName === sanitizedUserNickname;
+    
+    const matched = exactMatch || 
+                    (nameOnlyMatch && (normalizedBungieName.includes('#') && normalizedUserNickname.includes('#'))) || 
+                    sanitizedMatch;
     
     if (matched) {
-      console.log('Username verified successfully - exact match!');
+      console.log(`Match found: Exact: ${exactMatch}, NameOnly: ${nameOnlyMatch}, Sanitized: ${sanitizedMatch}`);
 
       // Update Airtable record (if found)
       if (table) {
@@ -386,17 +401,31 @@ app.get('/callback', async (req, res) => {
               .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
               h1 { color: #ff3e3e; }
               .details { text-align: left; background: rgba(255,62,62,0.1); padding: 15px; border-radius: 5px; margin-top: 20px; }
+              .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
+              .buttons { margin-top: 25px; }
+              .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin: 0 10px; }
             </style>
           </head>
           <body>
             <div class="container">
               <h1>Verification Failed</h1>
               <div class="details">
-                <p><strong>Bungie Username:</strong> ${fullBungieName}</p>
-                <p><strong>Your Nickname:</strong> ${userNickname}</p>
+                <p><strong>Your Bungie Account:</strong> ${fullBungieName}</p>
+                <p><strong>Application Nickname:</strong> ${userNickname}</p>
+              </div>
+              <div class="suggestion">
+                <p><strong>Common Issues:</strong></p>
+                <ul style="text-align: left;">
+                  <li>Exact character matching - ensure the Bungie ID is exactly the same</li>
+                  <li>Double-check the # code numbers after your name</li>
+                  <li>Watch for spaces or special characters</li>
+                </ul>
               </div>
               <p>Please ensure you're using the same Bungie account as you entered in your application.</p>
-              <p>Note: Make sure to include the full ID with "#" and numbers.</p>
+              <div class="buttons">
+                <a href="/email-verify?nickname=${encodeURIComponent(fullBungieName)}&submissionId=${encodeURIComponent(submissionId)}&token=${encodeURIComponent(generateVerificationToken(fullBungieName, submissionId))}" class="btn">Try with Current Bungie ID</a>
+                <a href="javascript:history.back()" class="btn" style="background-color: #333; color: #fff;">Go Back</a>
+              </div>
             </div>
           </body>
         </html>
@@ -491,7 +520,6 @@ app.get('/email-verify', async (req, res) => {
       if (records.length > 0) {
         const record = records[0];
         
-        // If already verified, show success message
         if (record.get('verified') === true) {
           return res.send(`
             <html>
@@ -501,54 +529,64 @@ app.get('/email-verify', async (req, res) => {
                   body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                   h1 { color: #c4ff00; }
+                  .success-icon { font-size: 48px; margin-bottom: 20px; color: #c4ff00; }
                 </style>
               </head>
               <body>
                 <div class="container">
+                  <div class="success-icon">✓</div>
                   <h1>Already Verified</h1>
-                  <p>Your Bungie identity has already been verified successfully.</p>
-                  <p>No further action is needed. Your application is being reviewed.</p>
+                  <p>Your Bungie identity <strong>(${record.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
+                  <p>No further action is needed. Your application is being reviewed by our team.</p>
+                </div>
+              </body>
+            </html>
+          `);
+        } else {
+          // If no record found with this submissionId
+          return res.send(`
+            <html>
+              <head>
+                <title>Verification Error</title>
+                <style>
+                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                  h1 { color: #ff3e3e; }
+                  .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <h1>Verification Error</h1>
+                  <p>We couldn't find your application record with ID: <strong>${submissionId}</strong></p>
+                  <div class="suggestion">
+                    <p><strong>Possible Solutions:</strong></p>
+                    <ul style="text-align: left;">
+                      <li>Ensure you've submitted your application first</li>
+                      <li>The link may be using an incorrect submission ID</li>
+                      <li>Contact support if you've already applied</li>
+                    </ul>
+                  </div>
                 </div>
               </body>
             </html>
           `);
         }
-      } else {
-        // If no record found with this submissionId
-        return res.send(`
-          <html>
-            <head>
-              <title>Verification Error</title>
-              <style>
-                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                h1 { color: #ff3e3e; }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <h1>Verification Error</h1>
-                <p>We couldn't find your application record.</p>
-                <p>Please ensure you've submitted your application or contact support for assistance.</p>
-              </div>
-            </body>
-          </html>
-        `);
+      } catch (error) {
+        console.error('Error checking verification status:', error);
       }
-    } catch (error) {
-      console.error('Error checking verification status:', error);
     }
+    
+    // If we got here, the user needs to verify - redirect to Bungie OAuth
+    const state = encodeURIComponent(JSON.stringify({
+      nickname,
+      submissionId
+    }));
+    
+    const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
+    
+    res.redirect(authUrl);
   }
-  
-  // If we got here, the user needs to verify - redirect to Bungie OAuth
-  const state = encodeURIComponent(JSON.stringify({
-    nickname,
-    submissionId
-  }));
-  
-  const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
-  
-  res.redirect(authUrl);
 });
 
 // Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work

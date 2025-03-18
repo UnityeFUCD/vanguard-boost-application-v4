@@ -28,7 +28,7 @@ function generateVerificationToken(nickname, submissionId, timestamp = Date.now(
 }
 
 // Function to validate a verification token
-function validateVerificationToken(nickname, submissionId, token) {
+function validateVerificationToken(nickname, submissionId, token, clockDriftToleranceMs = 5000) {
   try {
     // Handle old tokens without timestamp
     if (!token.includes('.')) {
@@ -41,10 +41,12 @@ function validateVerificationToken(nickname, submissionId, token) {
     // New token format with timestamp
     const [hash, timestamp] = token.split('.');
     
-    // Check if token is expired (e.g., 48 hours)
+    // Parse timestamp and check if token is expired (e.g., 48 hours)
+    const tokenTime = parseInt(timestamp);
     const now = Date.now();
-    if (now - parseInt(timestamp) > 48 * 60 * 60 * 1000) {
-      console.log('Token expired');
+    
+    if (isNaN(tokenTime) || now - tokenTime > 48 * 60 * 60 * 1000) {
+      console.log('Token expired or invalid timestamp');
       return false;
     }
     
@@ -52,10 +54,23 @@ function validateVerificationToken(nickname, submissionId, token) {
     const normalizedNickname = String(nickname).trim();
     const normalizedSubmissionId = String(submissionId).trim();
     
-    const data = `${normalizedNickname}:${normalizedSubmissionId}:${timestamp}:${SECRET_KEY}`;
-    const expectedHash = crypto.createHash('sha256').update(data).digest('hex');
+    // Check potential valid timestamps to account for clock drift
+    const timestampsToCheck = [
+      tokenTime, 
+      tokenTime - clockDriftToleranceMs, 
+      tokenTime + clockDriftToleranceMs
+    ];
     
-    return hash === expectedHash;
+    for (const ts of timestampsToCheck) {
+      const data = `${normalizedNickname}:${normalizedSubmissionId}:${ts}:${SECRET_KEY}`;
+      const expectedHash = crypto.createHash('sha256').update(data).digest('hex');
+      
+      if (hash === expectedHash) {
+        return true;
+      }
+    }
+    
+    return false;
   } catch (err) {
     console.error('Token validation error:', err);
     return false;
@@ -759,6 +774,7 @@ app.get('/email-verify', async (req, res) => {
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                   h1 { color: #ff3e3e; }
                   .error-icon { font-size: 64px; margin-bottom: 20px; color: #ff3e3e; }
+                  .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; }
                 </style>
               </head>
               <body>
@@ -776,11 +792,54 @@ app.get('/email-verify', async (req, res) => {
       `);
     }
     
-    console.log(`Verifying via email link: ${nickname} (ID: ${submissionId})`);
+    // Create a request ID for tracking
+    const requestID = req.requestId;
+    req.log.info(`Starting email verification`, { nickname, submissionId, requestID });
     
     // Validate the token
     const isValid = validateVerificationToken(nickname, submissionId, token);
     if (!isValid) {
+      req.log.warn(`Invalid or expired token`, { nickname, submissionId, requestID });
+      
+      // Check if the token is expired
+      const isExpired = token.includes('.') && 
+                        Date.now() - parseInt(token.split('.')[1]) > 48 * 60 * 60 * 1000;
+      
+      if (isExpired) {
+        // Provide a refresh link for expired tokens
+        const refreshUrl = `/refresh-token?nickname=${encodeURIComponent(nickname)}&submissionId=${encodeURIComponent(submissionId)}`;
+        
+        return res.end(`
+          <script>
+            document.open();
+            document.write(\`
+              <html>
+                <head>
+                  <title>Verification Link Expired</title>
+                  <style>
+                    body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                    .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                    h1 { color: #ff9d00; }
+                    .warning-icon { font-size: 64px; margin-bottom: 20px; color: #ff9d00; }
+                    .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; }
+                  </style>
+                </head>
+                <body>
+                  <div class="container">
+                    <div class="warning-icon">⚠️</div>
+                    <h1>Verification Link Expired</h1>
+                    <p>The verification link you're using has expired.</p>
+                    <p>Verification links are valid for 48 hours after they are created.</p>
+                    <a href="${refreshUrl}" class="btn">Generate New Verification Link</a>
+                  </div>
+                </body>
+              </html>
+            \`);
+            document.close();
+          </script>
+        `);
+      }
+      
       return res.end(`
         <script>
           document.open();
@@ -793,14 +852,16 @@ app.get('/email-verify', async (req, res) => {
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                   h1 { color: #ff3e3e; }
                   .error-icon { font-size: 64px; margin-bottom: 20px; color: #ff3e3e; }
+                  .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; }
                 </style>
               </head>
               <body>
                 <div class="container">
                   <div class="error-icon">⚠️</div>
                   <h1>Invalid Verification Link</h1>
-                  <p>The verification link is invalid or has expired.</p>
+                  <p>The verification link is invalid.</p>
                   <p>Please check your email for the correct link or contact support for assistance.</p>
+                  <a href="/refresh-token?nickname=${encodeURIComponent(nickname)}&submissionId=${encodeURIComponent(submissionId)}" class="btn">Try New Verification Link</a>
                 </div>
               </body>
             </html>
@@ -816,7 +877,12 @@ app.get('/email-verify', async (req, res) => {
       const verificationData = verificationAttempts.get(verificationKey);
       
       if (verificationData.verified) {
-        console.log(`Record ${submissionId} is already verified via ${verificationData.method}`);
+        req.log.info(`Record already verified`, { 
+          submissionId, 
+          method: verificationData.method,
+          verifiedAt: new Date(verificationData.timestamp).toISOString()
+        });
+        
         trackVerificationSuccess();
         
         return res.end(`
@@ -850,10 +916,13 @@ app.get('/email-verify', async (req, res) => {
     }
     
     // Record verification - this uses our transaction-safe recordVerification function
+    req.log.info(`Attempting to record verification`, { submissionId, method: 'email' });
     const verificationResult = await recordVerification(submissionId, nickname, 'email');
     
     if (verificationResult) {
+      req.log.info(`Verification successful`, { submissionId });
       trackVerificationSuccess();
+      
       return res.end(`
         <script>
           document.open();
@@ -882,6 +951,8 @@ app.get('/email-verify', async (req, res) => {
         </script>
       `);
     } else {
+      req.log.warn(`Verification recording failed`, { submissionId });
+      
       // Use our degraded service helper if the confirmation didn't go through
       return res.end(`
         <script>
@@ -903,6 +974,7 @@ app.get('/email-verify', async (req, res) => {
                   <h1>Verification Status Uncertain</h1>
                   <p>We've received your verification request, but we're having trouble updating your record.</p>
                   <p>This could be due to temporary database issues. Please check back later, or contact support if the problem persists.</p>
+                  <p>Reference ID: ${requestID}</p>
                 </div>
               </body>
             </html>
@@ -912,7 +984,7 @@ app.get('/email-verify', async (req, res) => {
       `);
     }
   } catch (error) {
-    console.error('Error during email verification:', error);
+    req.log.error('Error during email verification', error, { nickname, submissionId });
     
     return res.end(`
       <script>
@@ -933,7 +1005,7 @@ app.get('/email-verify', async (req, res) => {
                 <div class="error-icon">⚠️</div>
                 <h1>Verification Error</h1>
                 <p>An error occurred during verification. Please try again or contact support.</p>
-                <p>Error reference: ${Date.now()}</p>
+                <p>Error reference: ${req.requestId}</p>
               </div>
             </body>
           </html>
@@ -1628,4 +1700,343 @@ app.get('/admin/clear-rate-limits', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Visit http://localhost:${PORT} to access the application`);
+});
+
+// Startup environment validation
+function validateEnvironment() {
+  const requiredVars = [
+    { name: 'SECRET_KEY', minLength: 32 },
+    { name: 'BUNGIE_CLIENT_ID', required: false },
+    { name: 'BUNGIE_API_KEY', required: false },
+    { name: 'AIRTABLE_API_KEY', required: false },
+    { name: 'AIRTABLE_BASE_ID', required: false },
+    { name: 'ADMIN_TOKEN', minLength: 16 }
+  ];
+  
+  const issues = [];
+  
+  for (const v of requiredVars) {
+    const value = process.env[v.name];
+    
+    if (v.required !== false && (!value || value.trim() === '')) {
+      issues.push(`Missing required environment variable: ${v.name}`);
+    } else if (value && v.minLength && value.length < v.minLength) {
+      issues.push(`Environment variable ${v.name} is too short (minimum ${v.minLength} characters)`);
+    }
+  }
+  
+  // Special check for SECRET_KEY entropy
+  if (process.env.SECRET_KEY) {
+    const uniqueChars = new Set(process.env.SECRET_KEY.split('')).size;
+    if (uniqueChars < 12) {
+      issues.push('SECRET_KEY has low entropy - please use a more random string');
+    }
+  }
+  
+  if (issues.length > 0) {
+    console.warn('⚠️ Environment validation issues:');
+    issues.forEach(issue => console.warn(`  - ${issue}`));
+    console.warn('Application will continue, but some features may not work correctly');
+  } else {
+    console.log('✅ Environment validation passed');
+  }
+  
+  // Set a default admin token if not provided (development only)
+  if (process.env.NODE_ENV !== 'production' && !process.env.ADMIN_TOKEN) {
+    process.env.ADMIN_TOKEN = 'dev-admin-token-not-for-production';
+    console.warn('⚠️ Using default development admin token - NOT SECURE FOR PRODUCTION');
+  }
+}
+
+// Run environment validation at startup
+validateEnvironment();
+
+// Request ID middleware for logging correlation
+app.use((req, res, next) => {
+  req.requestId = crypto.randomBytes(16).toString('hex');
+  res.setHeader('X-Request-ID', req.requestId);
+  
+  // Add request-scoped logger
+  req.log = {
+    info: (message, data = {}) => {
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'INFO',
+        requestId: req.requestId,
+        message,
+        ...sanitizeLogData(data)
+      }));
+    },
+    warn: (message, data = {}) => {
+      console.warn(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'WARN',
+        requestId: req.requestId,
+        message,
+        ...sanitizeLogData(data)
+      }));
+    },
+    error: (message, error, data = {}) => {
+      console.error(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'ERROR',
+        requestId: req.requestId,
+        message,
+        error: error?.message || error,
+        stack: process.env.NODE_ENV !== 'production' ? error?.stack : undefined,
+        ...sanitizeLogData(data)
+      }));
+    }
+  };
+  
+  next();
+});
+
+// Sanitize sensitive data in logs
+function sanitizeLogData(data) {
+  const sanitized = { ...data };
+  
+  // List of keys that might contain sensitive data
+  const sensitiveKeys = [
+    'token', 'accessToken', 'apiKey', 'secret', 'password', 'authorization', 
+    'BUNGIE_CLIENT_SECRET', 'BUNGIE_API_KEY', 'AIRTABLE_API_KEY', 'SECRET_KEY', 'ADMIN_TOKEN'
+  ];
+  
+  // Recursively sanitize objects
+  function sanitizeObject(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    
+    const result = Array.isArray(obj) ? [...obj] : { ...obj };
+    
+    for (const key in result) {
+      if (sensitiveKeys.some(k => key.toLowerCase().includes(k.toLowerCase()))) {
+        result[key] = '[REDACTED]';
+      } else if (typeof result[key] === 'object') {
+        result[key] = sanitizeObject(result[key]);
+      }
+    }
+    
+    return result;
+  }
+  
+  return sanitizeObject(sanitized);
+}
+
+// Add cache control middleware for sensitive routes
+app.use(['/admin', '/verify', '/email-verify', '/callback', '/health'], (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+// Track last health check time to prevent race conditions
+let lastHealthCheckTime = {
+  airtable: 0,
+  bungie: 0
+};
+
+// Add health check mutex to prevent race conditions
+const healthCheckMutex = {
+  airtable: false,
+  bungie: false
+};
+
+// Improved checkAirtableHealth function with mutex protection
+async function checkAirtableHealth() {
+  // Prevent concurrent health checks
+  if (healthCheckMutex.airtable) {
+    return;
+  }
+  
+  // Check if a health check was performed recently
+  const now = Date.now();
+  if (now - lastHealthCheckTime.airtable < 30000) { // 30 seconds
+    return;
+  }
+  
+  try {
+    // Acquire mutex
+    healthCheckMutex.airtable = true;
+    lastHealthCheckTime.airtable = now;
+    
+    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
+      console.log('Airtable not configured - skipping health check');
+      systemState.airtableHealthy = false;
+      return;
+    }
+    
+    if (!table) {
+      // Try to reinitialize
+      try {
+        console.log('Attempting to reinitialize Airtable connection...');
+        const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
+        table = base('Applications');
+        console.log('Airtable connection reinitialized');
+      } catch (error) {
+        console.error('Failed to reinitialize Airtable connection:', error);
+        systemState.airtableHealthy = false;
+        return;
+      }
+    }
+    
+    // Perform a small query to confirm connection works
+    const testQuery = await table.select({
+      maxRecords: 1,
+      view: 'Grid view'
+    }).firstPage();
+    
+    systemState.airtableHealthy = true;
+    
+    // Remove from degraded services list if it was there
+    const index = systemState.degradedServices.indexOf('airtable');
+    if (index !== -1) {
+      systemState.degradedServices.splice(index, 1);
+    }
+    
+    console.log('Airtable connection healthy');
+  } catch (error) {
+    console.error('Airtable health check failed:', error);
+    systemState.airtableHealthy = false;
+    
+    // Add to degraded services if not already there
+    if (!systemState.degradedServices.includes('airtable')) {
+      systemState.degradedServices.push('airtable');
+    }
+  } finally {
+    // Release mutex
+    healthCheckMutex.airtable = false;
+  }
+}
+
+// Improved checkBungieApiHealth function with mutex protection
+async function checkBungieApiHealth() {
+  // Prevent concurrent health checks
+  if (healthCheckMutex.bungie) {
+    return;
+  }
+  
+  // Check if a health check was performed recently
+  const now = Date.now();
+  if (now - lastHealthCheckTime.bungie < 30000) { // 30 seconds
+    return;
+  }
+  
+  try {
+    // Acquire mutex
+    healthCheckMutex.bungie = true;
+    lastHealthCheckTime.bungie = now;
+    
+    if (!BUNGIE_API_KEY) {
+      console.log('Bungie API not configured - skipping health check');
+      systemState.bungieApiHealthy = false;
+      return;
+    }
+    
+    // Set up API request timeout to prevent hanging
+    const axiosWithTimeout = axios.create({
+      timeout: 5000 // 5 second timeout for health check
+    });
+    
+    // Make a simple request to check if API is working
+    const response = await axiosWithTimeout.get('https://www.bungie.net/Platform/Settings/', {
+      headers: {
+        'X-API-Key': BUNGIE_API_KEY
+      }
+    });
+    
+    if (response.status === 200 && response.data && response.data.ErrorCode === 1) {
+      systemState.bungieApiHealthy = true;
+      systemState.lastCheckedBungie = now;
+      
+      // Remove from degraded services list if it was there
+      const index = systemState.degradedServices.indexOf('bungie-api');
+      if (index !== -1) {
+        systemState.degradedServices.splice(index, 1);
+      }
+    } else {
+      systemState.bungieApiHealthy = false;
+      if (!systemState.degradedServices.includes('bungie-api')) {
+        systemState.degradedServices.push('bungie-api');
+      }
+      console.warn('Bungie API returned unexpected response:', response.status, response.data?.ErrorCode);
+    }
+  } catch (error) {
+    systemState.bungieApiHealthy = false;
+    if (!systemState.degradedServices.includes('bungie-api')) {
+      systemState.degradedServices.push('bungie-api');
+    }
+    console.error('Bungie API health check failed:', error.message);
+  } finally {
+    // Release mutex
+    healthCheckMutex.bungie = false;
+  }
+}
+
+// Add token refresh capability to email-verify endpoint
+app.get('/refresh-token', (req, res) => {
+  const { nickname, submissionId } = req.query;
+  
+  if (!nickname || !submissionId) {
+    return renderVerificationError(
+      res, 
+      'Missing Information', 
+      'Both nickname and submission ID are required to refresh your verification token.'
+    );
+  }
+  
+  try {
+    // Generate new token with current timestamp
+    const newToken = generateVerificationToken(nickname, submissionId);
+    const verificationUrl = `${req.protocol}://${req.get('host')}/email-verify?nickname=${encodeURIComponent(nickname)}&submissionId=${encodeURIComponent(submissionId)}&token=${encodeURIComponent(newToken)}`;
+    
+    return res.send(`
+      <html>
+        <head>
+          <title>New Verification Link</title>
+          <style>
+            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+            h1 { color: #c4ff00; }
+            .link-container { 
+              background: rgba(255,255,255,0.1); 
+              padding: 15px; 
+              border-radius: 5px; 
+              margin: 20px 0; 
+              word-break: break-all;
+              text-align: left;
+            }
+            .btn { 
+              display: inline-block; 
+              padding: 10px 20px; 
+              background-color: #c4ff00; 
+              color: #000; 
+              text-decoration: none; 
+              border-radius: 4px; 
+              margin-top: 20px;
+              font-weight: bold;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>New Verification Link</h1>
+            <p>A new verification link has been generated for you:</p>
+            <div class="link-container">
+              <a href="${escapeHtml(verificationUrl)}">${escapeHtml(verificationUrl)}</a>
+            </div>
+            <p>This link will expire in 48 hours.</p>
+            <a href="${escapeHtml(verificationUrl)}" class="btn">VERIFY NOW</a>
+          </div>
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    req.log.error('Error generating refresh token', error, { nickname, submissionId });
+    return renderVerificationError(
+      res, 
+      'Token Generation Failed', 
+      'An error occurred while generating a new verification token. Please try again or contact support.'
+    );
+  }
 });

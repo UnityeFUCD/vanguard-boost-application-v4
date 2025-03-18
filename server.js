@@ -513,6 +513,27 @@ app.get('/email-verify', async (req, res) => {
             </html>
           `);
         }
+      } else {
+        // If no record found with this submissionId
+        return res.send(`
+          <html>
+            <head>
+              <title>Verification Error</title>
+              <style>
+                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                h1 { color: #ff3e3e; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <h1>Verification Error</h1>
+                <p>We couldn't find your application record.</p>
+                <p>Please ensure you've submitted your application or contact support for assistance.</p>
+              </div>
+            </body>
+          </html>
+        `);
       }
     } catch (error) {
       console.error('Error checking verification status:', error);

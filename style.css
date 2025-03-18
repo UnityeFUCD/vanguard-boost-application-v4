@@ -402,8 +402,8 @@ body::before {
   content: attr(title);
   position: absolute;
   bottom: 25px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  transform: translateX(0);
   background: var(--section-bg);
   color: var(--text);
   padding: 8px 12px;
@@ -414,7 +414,9 @@ body::before {
   border-left: 3px solid var(--primary);
   font-weight: normal;
   min-width: 200px;
-  text-align: center;
+  text-align: left;
+  width: max-content;
+  max-width: 300px;
 }
 
 /* Add a small arrow at the bottom of the tooltip */
@@ -422,8 +424,8 @@ body::before {
   content: '';
   position: absolute;
   bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 10px;
+  transform: translateX(0);
   border-width: 5px;
   border-style: solid;
   border-color: var(--section-bg) transparent transparent transparent;
@@ -500,8 +502,9 @@ body::before {
   letter-spacing: 1px;
   display: inline-block;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   clip-path: polygon(10% 0%, 100% 0%, 90% 100%, 0% 100%);
+  box-shadow: none;
 }
 
 .submit-button::after,
@@ -547,6 +550,7 @@ body::before {
   margin-top: 20px;
   display: inline-block;
   clip-path: polygon(10% 0%, 100% 0%, 90% 100%, 0% 100%);
+  overflow: visible;
 }
 
 .back-button:hover,
@@ -611,6 +615,8 @@ body::before {
   color: black;
   position: relative;
   padding-right: 40px;
+  overflow: visible;
+  transform: none;
 }
 
 #joinNowButton::after {

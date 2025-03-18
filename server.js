@@ -1,16 +1,229 @@
-// Express server setup
-const express = require('express');
-const axios = require('axios');
-const Airtable = require('airtable');
-const path = require('path');
-const crypto = require('crypto');
+// Environment setup - move this to the top
 require('dotenv').config();
 
-const app = express();
-const PORT = process.env.PORT || 3195;
+// Startup environment validation - happens before anything else
+function validateEnvironment() {
+  const requiredVars = [
+    { name: 'SECRET_KEY', minLength: 32 },
+    { name: 'BUNGIE_CLIENT_ID', required: false },
+    { name: 'BUNGIE_API_KEY', required: false },
+    { name: 'AIRTABLE_API_KEY', required: false },
+    { name: 'AIRTABLE_BASE_ID', required: false },
+    { name: 'ADMIN_TOKEN', minLength: 16 }
+  ];
+  
+  const issues = [];
+  
+  for (const v of requiredVars) {
+    const value = process.env[v.name];
+    
+    if (v.required !== false && (!value || value.trim() === '')) {
+      issues.push(`Missing required environment variable: ${v.name}`);
+    } else if (value && v.minLength && value.length < v.minLength) {
+      issues.push(`Environment variable ${v.name} is too short (minimum ${v.minLength} characters)`);
+    }
+  }
+  
+  // Special check for SECRET_KEY entropy
+  if (process.env.SECRET_KEY) {
+    const uniqueChars = new Set(process.env.SECRET_KEY.split('')).size;
+    if (uniqueChars < 12) {
+      issues.push('SECRET_KEY has low entropy - please use a more random string');
+    }
+  }
+  
+  if (issues.length > 0) {
+    console.warn('⚠️ Environment validation issues:');
+    issues.forEach(issue => console.warn(`  - ${issue}`));
+    console.warn('Application will continue, but some features may not work correctly');
+  } else {
+    console.log('✅ Environment validation passed');
+  }
+  
+  // Set a default admin token if not provided (development only)
+  if (process.env.NODE_ENV !== 'production' && !process.env.ADMIN_TOKEN) {
+    process.env.ADMIN_TOKEN = 'dev-admin-token-not-for-production';
+    console.warn('⚠️ Using default development admin token - NOT SECURE FOR PRODUCTION');
+  }
+}
 
-// Secret key for token generation - would typically be in environment variables
-const SECRET_KEY = process.env.TOKEN_SECRET || 'vanguard-boost-verification-secret';
+// Run environment validation at startup
+validateEnvironment();
+
+// Import dependencies
+const express = require('express');
+const crypto = require('crypto');
+const cors = require('cors');
+const axios = require('axios');
+const Airtable = require('airtable');
+const { createServer } = require('http');
+const compression = require('compression');
+
+// Initialize Express app
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Secret key for token generation (from environment)
+const SECRET_KEY = process.env.SECRET_KEY;
+
+// Bungie API credentials from environment variables
+const { BUNGIE_CLIENT_ID, BUNGIE_CLIENT_SECRET, BUNGIE_API_KEY, REDIRECT_URI } = process.env;
+
+// Sanitize sensitive data in logs
+function sanitizeLogData(data) {
+  const sanitized = { ...data };
+  
+  // List of keys that might contain sensitive data
+  const sensitiveKeys = [
+    'token', 'accessToken', 'apiKey', 'secret', 'password', 'authorization', 
+    'BUNGIE_CLIENT_SECRET', 'BUNGIE_API_KEY', 'AIRTABLE_API_KEY', 'SECRET_KEY', 'ADMIN_TOKEN'
+  ];
+  
+  // Recursively sanitize objects
+  function sanitizeObject(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    
+    const result = Array.isArray(obj) ? [...obj] : { ...obj };
+    
+    for (const key in result) {
+      if (sensitiveKeys.some(k => key.toLowerCase().includes(k.toLowerCase()))) {
+        result[key] = '[REDACTED]';
+      } else if (typeof result[key] === 'object') {
+        result[key] = sanitizeObject(result[key]);
+      }
+    }
+    
+    return result;
+  }
+  
+  return sanitizeObject(sanitized);
+}
+
+// Configure middleware early
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(compression());
+
+// Add basic CORS support
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if(!origin) return callback(null, true);
+    
+    // Simple check for allowed origins
+    const allowedOrigins = [
+      /^https?:\/\/localhost:\d+$/,
+      /^https?:\/\/[\w-]+\.netlify\.app$/,
+      /^https?:\/\/[\w-]+\.vanguard-boost\.com$/
+    ];
+    
+    // Check if origin matches any allowed pattern
+    if(allowedOrigins.some(pattern => pattern.test(origin))) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  credentials: true,
+  optionsSuccessStatus: 204
+}));
+
+// Request ID middleware for logging correlation - add this early in middleware chain
+app.use((req, res, next) => {
+  req.requestId = crypto.randomBytes(16).toString('hex');
+  res.setHeader('X-Request-ID', req.requestId);
+  
+  // Add request-scoped logger
+  req.log = {
+    info: (message, data = {}) => {
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'INFO',
+        requestId: req.requestId,
+        message,
+        ...sanitizeLogData(data)
+      }));
+    },
+    warn: (message, data = {}) => {
+      console.warn(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'WARN',
+        requestId: req.requestId,
+        message,
+        ...sanitizeLogData(data)
+      }));
+    },
+    error: (message, error, data = {}) => {
+      console.error(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'ERROR',
+        requestId: req.requestId,
+        message,
+        error: error?.message || error,
+        stack: process.env.NODE_ENV !== 'production' ? error?.stack : undefined,
+        ...sanitizeLogData(data)
+      }));
+    }
+  };
+  
+  next();
+});
+
+// Add middleware for security headers
+app.use((req, res, next) => {
+  // Security headers
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Basic CSP - can be expanded based on requirements
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' https://www.bungie.net; style-src 'self' 'unsafe-inline';");
+  
+  // Redirect HTTP to HTTPS in production
+  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect(`https://${req.hostname}${req.url}`);
+  }
+  
+  next();
+});
+
+// Add cache control middleware for sensitive routes
+app.use(['/admin', '/verify', '/email-verify', '/callback', '/health'], (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+// Set proper Content-Type for HTML responses
+app.use((req, res, next) => {
+  const originalSend = res.send;
+  res.send = function(body) {
+    // Check if the body looks like HTML and Content-Type isn't already set
+    if (typeof body === 'string' && body.trim().startsWith('<') && !res.get('Content-Type')) {
+      res.set('Content-Type', 'text/html; charset=utf-8');
+    }
+    return originalSend.call(this, body);
+  };
+  next();
+});
+
+// Initialize Airtable - with better error handling
+let table;
+try {
+  if (process.env.AIRTABLE_API_KEY && process.env.AIRTABLE_BASE_ID) {
+    console.log('Initializing Airtable connection...');
+    const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
+    table = base('Applications');
+    console.log('Airtable connection initialized successfully');
+  } else {
+    console.warn('Airtable API key or base ID not provided - database functionality will be limited');
+  }
+} catch (error) {
+  console.error('Failed to initialize Airtable connection:', error);
+  console.warn('Application will continue but database functionality will be unavailable');
+}
 
 // Track verification attempts (would use Redis in production)
 const verificationAttempts = new Map();
@@ -139,13 +352,8 @@ async function recordVerification(submissionId, bungieName, method = 'bungie') {
     // Check if already verified
     if (record.get('verified') === true) {
       console.log(`Record ${submissionId} already verified`);
-      // Update memory cache
-      verificationAttempts.set(`verified:${submissionId}`, {
-        verified: true,
-        timestamp: Date.now(),
-        method,
-        bungieName: bungieName || record.get('bungieUsername')
-      });
+      // Update memory cache using thread-safe operation
+      await updateVerificationStatus(submissionId, bungieName || record.get('bungieUsername'), method);
       releaseVerificationLock(submissionId);
       return true;
     }
@@ -159,13 +367,8 @@ async function recordVerification(submissionId, bungieName, method = 'bungie') {
         verificationMethod: method
       });
       
-      // Update memory cache
-      verificationAttempts.set(`verified:${submissionId}`, {
-        verified: true,
-        timestamp: Date.now(),
-        method,
-        bungieName
-      });
+      // Update memory cache using thread-safe operation
+      await updateVerificationStatus(submissionId, bungieName, method);
       
       console.log(`Successfully verified record ${submissionId}`);
       releaseVerificationLock(submissionId);
@@ -181,89 +384,6 @@ async function recordVerification(submissionId, bungieName, method = 'bungie') {
     return false;
   }
 }
-
-// Middleware to parse JSON and form data
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Serve static files from the root directory
-app.use(express.static(__dirname));
-
-// Airtable setup
-let base;
-let table;
-try {
-  if (process.env.AIRTABLE_API_KEY && process.env.AIRTABLE_BASE_ID && process.env.AIRTABLE_TABLE_NAME) {
-    base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
-    table = base(process.env.AIRTABLE_TABLE_NAME);
-    console.log('Airtable configured successfully');
-  } else {
-    console.log('Missing Airtable environment variables, Airtable integration disabled');
-  }
-} catch (error) {
-  console.error('Error configuring Airtable:', error);
-}
-
-// Bungie API credentials from environment variables
-const { BUNGIE_CLIENT_ID, BUNGIE_CLIENT_SECRET, BUNGIE_API_KEY, REDIRECT_URI } = process.env;
-
-// Add persistent health check for Airtable connection
-let airtableHealthy = !!table; // Initial status based on connection
-const HEALTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
-
-// Health check and reconnection function
-async function checkAirtableHealth() {
-  try {
-    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
-      console.log('Airtable not configured - skipping health check');
-      airtableHealthy = false;
-      return;
-    }
-    
-    if (!table) {
-      // Try to reinitialize
-      try {
-        console.log('Attempting to reinitialize Airtable connection...');
-        const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
-        table = base('Applications');
-        console.log('Airtable connection reinitialized');
-      } catch (error) {
-        console.error('Failed to reinitialize Airtable connection:', error);
-        airtableHealthy = false;
-        return;
-      }
-    }
-    
-    // Perform a small query to confirm connection works
-    const testQuery = await table.select({
-      maxRecords: 1,
-      view: 'Grid view'
-    }).firstPage();
-    
-    airtableHealthy = true;
-    console.log('Airtable connection healthy');
-  } catch (error) {
-    console.error('Airtable health check failed:', error);
-    airtableHealthy = false;
-  }
-}
-
-// Initial health check
-checkAirtableHealth();
-
-// Schedule regular health checks
-setInterval(checkAirtableHealth, HEALTH_CHECK_INTERVAL);
-
-// Add basic error reporting
-process.on('uncaughtException', (error) => {
-  console.error('UNCAUGHT EXCEPTION:', error);
-  // Keep the process running
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('UNHANDLED PROMISE REJECTION:', reason);
-  // Keep the process running
-});
 
 // Root route - serve the index.html file
 app.get('/', (req, res) => {
@@ -1107,24 +1227,6 @@ setInterval(() => {
   console.log(`Cleaned up verification attempts map. Current size: ${verificationAttempts.size}`);
 }, CLEANUP_INTERVAL);
 
-// Add middleware for security headers
-app.use((req, res, next) => {
-  // Security headers
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  // Basic CSP - can be expanded based on requirements
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' https://www.bungie.net; style-src 'self' 'unsafe-inline';");
-  
-  // Redirect HTTP to HTTPS in production
-  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
-    return res.redirect(`https://${req.hostname}${req.url}`);
-  }
-  
-  next();
-});
-
 // Global application state
 let systemState = {
   bungieApiHealthy: true,
@@ -1252,15 +1354,113 @@ const rateLimiter = {
 // Start the rate limiter cleanup
 rateLimiter.cleanup();
 
-// Check Bungie API health
-async function checkBungieApiHealth() {
-  if (!BUNGIE_API_KEY) {
-    console.log('Bungie API not configured - skipping health check');
-    systemState.bungieApiHealthy = false;
+// Track last health check time to prevent race conditions
+let lastHealthCheckTime = {
+  airtable: 0,
+  bungie: 0
+};
+
+// Add health check mutex to prevent race conditions
+const healthCheckMutex = {
+  airtable: false,
+  bungie: false
+};
+
+// Add persistent health check for Airtable connection
+let airtableHealthy = !!table; // Initial status based on connection
+const HEALTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
+
+// Improved checkAirtableHealth function with mutex protection
+async function checkAirtableHealth() {
+  // Prevent concurrent health checks
+  if (healthCheckMutex.airtable) {
+    return;
+  }
+  
+  // Check if a health check was performed recently
+  const now = Date.now();
+  if (now - lastHealthCheckTime.airtable < 30000) { // 30 seconds
     return;
   }
   
   try {
+    // Acquire mutex
+    healthCheckMutex.airtable = true;
+    lastHealthCheckTime.airtable = now;
+    
+    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
+      console.log('Airtable not configured - skipping health check');
+      systemState.airtableHealthy = false;
+      return;
+    }
+    
+    if (!table) {
+      // Try to reinitialize
+      try {
+        console.log('Attempting to reinitialize Airtable connection...');
+        const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
+        table = base('Applications');
+        console.log('Airtable connection reinitialized');
+      } catch (error) {
+        console.error('Failed to reinitialize Airtable connection:', error);
+        systemState.airtableHealthy = false;
+        return;
+      }
+    }
+    
+    // Perform a small query to confirm connection works
+    const testQuery = await table.select({
+      maxRecords: 1,
+      view: 'Grid view'
+    }).firstPage();
+    
+    systemState.airtableHealthy = true;
+    
+    // Remove from degraded services list if it was there
+    const index = systemState.degradedServices.indexOf('airtable');
+    if (index !== -1) {
+      systemState.degradedServices.splice(index, 1);
+    }
+    
+    console.log('Airtable connection healthy');
+  } catch (error) {
+    console.error('Airtable health check failed:', error);
+    systemState.airtableHealthy = false;
+    
+    // Add to degraded services if not already there
+    if (!systemState.degradedServices.includes('airtable')) {
+      systemState.degradedServices.push('airtable');
+    }
+  } finally {
+    // Release mutex
+    healthCheckMutex.airtable = false;
+  }
+}
+
+// Improved checkBungieApiHealth function with mutex protection
+async function checkBungieApiHealth() {
+  // Prevent concurrent health checks
+  if (healthCheckMutex.bungie) {
+    return;
+  }
+  
+  // Check if a health check was performed recently
+  const now = Date.now();
+  if (now - lastHealthCheckTime.bungie < 30000) { // 30 seconds
+    return;
+  }
+  
+  try {
+    // Acquire mutex
+    healthCheckMutex.bungie = true;
+    lastHealthCheckTime.bungie = now;
+    
+    if (!BUNGIE_API_KEY) {
+      console.log('Bungie API not configured - skipping health check');
+      systemState.bungieApiHealthy = false;
+      return;
+    }
+    
     // Set up API request timeout to prevent hanging
     const axiosWithTimeout = axios.create({
       timeout: 5000 // 5 second timeout for health check
@@ -1275,10 +1475,18 @@ async function checkBungieApiHealth() {
     
     if (response.status === 200 && response.data && response.data.ErrorCode === 1) {
       systemState.bungieApiHealthy = true;
-      systemState.lastCheckedBungie = Date.now();
+      systemState.lastCheckedBungie = now;
+      
+      // Remove from degraded services list if it was there
+      const index = systemState.degradedServices.indexOf('bungie-api');
+      if (index !== -1) {
+        systemState.degradedServices.splice(index, 1);
+      }
     } else {
       systemState.bungieApiHealthy = false;
-      systemState.degradedServices.push('bungie-api');
+      if (!systemState.degradedServices.includes('bungie-api')) {
+        systemState.degradedServices.push('bungie-api');
+      }
       console.warn('Bungie API returned unexpected response:', response.status, response.data?.ErrorCode);
     }
   } catch (error) {
@@ -1287,14 +1495,178 @@ async function checkBungieApiHealth() {
       systemState.degradedServices.push('bungie-api');
     }
     console.error('Bungie API health check failed:', error.message);
+  } finally {
+    // Release mutex
+    healthCheckMutex.bungie = false;
   }
 }
 
 // Initial health checks
+checkAirtableHealth();
 checkBungieApiHealth();
 
-// Schedule regular Bungie API health checks
+// Schedule regular health checks
+setInterval(checkAirtableHealth, HEALTH_CHECK_INTERVAL);
 setInterval(checkBungieApiHealth, 5 * 60 * 1000); // Every 5 minutes
+
+// Add basic error reporting
+process.on('uncaughtException', (error) => {
+  console.error('UNCAUGHT EXCEPTION:', error);
+  // Keep the process running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED PROMISE REJECTION:', reason);
+  // Keep the process running
+});
+
+// Improved memory map operations - thread-safe updates with mutex pattern
+// Mutex for memory operations
+const memoryMutex = {
+  locks: new Map(),
+  
+  // Acquire a mutex lock
+  async acquire(key, timeoutMs = 500) {
+    const lockKey = `mutex:${key}`;
+    const startTime = Date.now();
+    
+    // Wait for lock to be released if already held
+    while (this.locks.has(lockKey)) {
+      // Check for timeout
+      if (Date.now() - startTime > timeoutMs) {
+        return false;
+      }
+      
+      // Wait a bit before checking again
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    
+    // Acquire the lock
+    this.locks.set(lockKey, {
+      timestamp: Date.now(),
+      threadId: crypto.randomBytes(8).toString('hex')
+    });
+    
+    return true;
+  },
+  
+  // Release a mutex lock
+  release(key) {
+    const lockKey = `mutex:${key}`;
+    this.locks.delete(lockKey);
+  }
+};
+
+// Thread-safe map update
+async function safeMapUpdate(map, key, updateFn, timeoutMs = 500) {
+  // Try to acquire lock
+  if (!await memoryMutex.acquire(key, timeoutMs)) {
+    console.warn(`Failed to acquire lock for key: ${key}`);
+    return false;
+  }
+  
+  try {
+    // Get current value
+    const currentValue = map.get(key);
+    
+    // Update with provided function
+    const newValue = updateFn(currentValue);
+    
+    // Store updated value
+    map.set(key, newValue);
+    
+    return true;
+  } finally {
+    // Always release lock
+    memoryMutex.release(key);
+  }
+}
+
+// Thread-safe verification status update
+async function updateVerificationStatus(submissionId, bungieName, method) {
+  if (!submissionId) return false;
+  
+  const verificationKey = `verified:${submissionId}`;
+  
+  return safeMapUpdate(verificationAttempts, verificationKey, (currentValue) => {
+    // If already has a value, keep verified status but update other fields
+    if (currentValue && currentValue.verified) {
+      return {
+        ...currentValue,
+        // Update latest verification details
+        timestamp: Date.now(),
+        method: method || currentValue.method,
+        bungieName: bungieName || currentValue.bungieName
+      };
+    }
+    
+    // New verification
+    return {
+      verified: true,
+      timestamp: Date.now(),
+      method: method || 'unknown',
+      bungieName: bungieName || ''
+    };
+  });
+}
+
+// Graceful shutdown handling
+let shuttingDown = false;
+const activeConnections = new Set();
+
+// Create HTTP server with graceful shutdown
+const server = createServer(app);
+
+// Track active connections
+server.on('connection', (connection) => {
+  activeConnections.add(connection);
+  
+  connection.on('close', () => {
+    activeConnections.delete(connection);
+  });
+});
+
+// Implement graceful shutdown
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  
+  console.log(`Received ${signal}. Starting graceful shutdown...`);
+  
+  // Put server in maintenance mode immediately
+  systemState.maintenanceMode = true;
+  
+  // Stop accepting new connections
+  server.close(() => {
+    console.log('HTTP server closed.');
+    
+    // Perform cleanup
+    let pendingVerifications = verificationLocks.size;
+    if (pendingVerifications > 0) {
+      console.log(`Waiting for ${pendingVerifications} pending verifications to complete...`);
+      
+      // Wait a bit for verifications to complete (max 5 seconds)
+      setTimeout(() => {
+        console.log('Forcing process exit after timeout');
+        process.exit(0);
+      }, 5000);
+    } else {
+      process.exit(0);
+    }
+  });
+  
+  // Close existing connections after a grace period
+  setTimeout(() => {
+    console.log(`Forcing ${activeConnections.size} active connections to close`);
+    for (const conn of activeConnections) {
+      conn.destroy();
+    }
+  }, 10000);
+}
+
+// Register shutdown handlers
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Middleware for all verification endpoints
 function verificationMiddleware(req, res, next) {
@@ -1702,281 +2074,41 @@ app.listen(PORT, () => {
   console.log(`Visit http://localhost:${PORT} to access the application`);
 });
 
-// Startup environment validation
-function validateEnvironment() {
-  const requiredVars = [
-    { name: 'SECRET_KEY', minLength: 32 },
-    { name: 'BUNGIE_CLIENT_ID', required: false },
-    { name: 'BUNGIE_API_KEY', required: false },
-    { name: 'AIRTABLE_API_KEY', required: false },
-    { name: 'AIRTABLE_BASE_ID', required: false },
-    { name: 'ADMIN_TOKEN', minLength: 16 }
-  ];
-  
-  const issues = [];
-  
-  for (const v of requiredVars) {
-    const value = process.env[v.name];
-    
-    if (v.required !== false && (!value || value.trim() === '')) {
-      issues.push(`Missing required environment variable: ${v.name}`);
-    } else if (value && v.minLength && value.length < v.minLength) {
-      issues.push(`Environment variable ${v.name} is too short (minimum ${v.minLength} characters)`);
-    }
-  }
-  
-  // Special check for SECRET_KEY entropy
-  if (process.env.SECRET_KEY) {
-    const uniqueChars = new Set(process.env.SECRET_KEY.split('')).size;
-    if (uniqueChars < 12) {
-      issues.push('SECRET_KEY has low entropy - please use a more random string');
-    }
-  }
-  
-  if (issues.length > 0) {
-    console.warn('⚠️ Environment validation issues:');
-    issues.forEach(issue => console.warn(`  - ${issue}`));
-    console.warn('Application will continue, but some features may not work correctly');
-  } else {
-    console.log('✅ Environment validation passed');
-  }
-  
-  // Set a default admin token if not provided (development only)
-  if (process.env.NODE_ENV !== 'production' && !process.env.ADMIN_TOKEN) {
-    process.env.ADMIN_TOKEN = 'dev-admin-token-not-for-production';
-    console.warn('⚠️ Using default development admin token - NOT SECURE FOR PRODUCTION');
-  }
-}
-
-// Run environment validation at startup
-validateEnvironment();
-
-// Request ID middleware for logging correlation
-app.use((req, res, next) => {
-  req.requestId = crypto.randomBytes(16).toString('hex');
-  res.setHeader('X-Request-ID', req.requestId);
-  
-  // Add request-scoped logger
-  req.log = {
-    info: (message, data = {}) => {
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'INFO',
-        requestId: req.requestId,
-        message,
-        ...sanitizeLogData(data)
-      }));
-    },
-    warn: (message, data = {}) => {
-      console.warn(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'WARN',
-        requestId: req.requestId,
-        message,
-        ...sanitizeLogData(data)
-      }));
-    },
-    error: (message, error, data = {}) => {
-      console.error(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: 'ERROR',
-        requestId: req.requestId,
-        message,
-        error: error?.message || error,
-        stack: process.env.NODE_ENV !== 'production' ? error?.stack : undefined,
-        ...sanitizeLogData(data)
-      }));
-    }
-  };
-  
-  next();
-});
-
-// Sanitize sensitive data in logs
-function sanitizeLogData(data) {
-  const sanitized = { ...data };
-  
-  // List of keys that might contain sensitive data
-  const sensitiveKeys = [
-    'token', 'accessToken', 'apiKey', 'secret', 'password', 'authorization', 
-    'BUNGIE_CLIENT_SECRET', 'BUNGIE_API_KEY', 'AIRTABLE_API_KEY', 'SECRET_KEY', 'ADMIN_TOKEN'
-  ];
-  
-  // Recursively sanitize objects
-  function sanitizeObject(obj) {
-    if (!obj || typeof obj !== 'object') return obj;
-    
-    const result = Array.isArray(obj) ? [...obj] : { ...obj };
-    
-    for (const key in result) {
-      if (sensitiveKeys.some(k => key.toLowerCase().includes(k.toLowerCase()))) {
-        result[key] = '[REDACTED]';
-      } else if (typeof result[key] === 'object') {
-        result[key] = sanitizeObject(result[key]);
-      }
-    }
-    
-    return result;
-  }
-  
-  return sanitizeObject(sanitized);
-}
-
-// Add cache control middleware for sensitive routes
-app.use(['/admin', '/verify', '/email-verify', '/callback', '/health'], (req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  next();
-});
-
-// Track last health check time to prevent race conditions
-let lastHealthCheckTime = {
-  airtable: 0,
-  bungie: 0
-};
-
-// Add health check mutex to prevent race conditions
-const healthCheckMutex = {
-  airtable: false,
-  bungie: false
-};
-
-// Improved checkAirtableHealth function with mutex protection
-async function checkAirtableHealth() {
-  // Prevent concurrent health checks
-  if (healthCheckMutex.airtable) {
-    return;
-  }
-  
-  // Check if a health check was performed recently
-  const now = Date.now();
-  if (now - lastHealthCheckTime.airtable < 30000) { // 30 seconds
-    return;
-  }
-  
-  try {
-    // Acquire mutex
-    healthCheckMutex.airtable = true;
-    lastHealthCheckTime.airtable = now;
-    
-    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
-      console.log('Airtable not configured - skipping health check');
-      systemState.airtableHealthy = false;
-      return;
-    }
-    
-    if (!table) {
-      // Try to reinitialize
-      try {
-        console.log('Attempting to reinitialize Airtable connection...');
-        const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
-        table = base('Applications');
-        console.log('Airtable connection reinitialized');
-      } catch (error) {
-        console.error('Failed to reinitialize Airtable connection:', error);
-        systemState.airtableHealthy = false;
-        return;
-      }
-    }
-    
-    // Perform a small query to confirm connection works
-    const testQuery = await table.select({
-      maxRecords: 1,
-      view: 'Grid view'
-    }).firstPage();
-    
-    systemState.airtableHealthy = true;
-    
-    // Remove from degraded services list if it was there
-    const index = systemState.degradedServices.indexOf('airtable');
-    if (index !== -1) {
-      systemState.degradedServices.splice(index, 1);
-    }
-    
-    console.log('Airtable connection healthy');
-  } catch (error) {
-    console.error('Airtable health check failed:', error);
-    systemState.airtableHealthy = false;
-    
-    // Add to degraded services if not already there
-    if (!systemState.degradedServices.includes('airtable')) {
-      systemState.degradedServices.push('airtable');
-    }
-  } finally {
-    // Release mutex
-    healthCheckMutex.airtable = false;
-  }
-}
-
-// Improved checkBungieApiHealth function with mutex protection
-async function checkBungieApiHealth() {
-  // Prevent concurrent health checks
-  if (healthCheckMutex.bungie) {
-    return;
-  }
-  
-  // Check if a health check was performed recently
-  const now = Date.now();
-  if (now - lastHealthCheckTime.bungie < 30000) { // 30 seconds
-    return;
-  }
-  
-  try {
-    // Acquire mutex
-    healthCheckMutex.bungie = true;
-    lastHealthCheckTime.bungie = now;
-    
-    if (!BUNGIE_API_KEY) {
-      console.log('Bungie API not configured - skipping health check');
-      systemState.bungieApiHealthy = false;
-      return;
-    }
-    
-    // Set up API request timeout to prevent hanging
-    const axiosWithTimeout = axios.create({
-      timeout: 5000 // 5 second timeout for health check
-    });
-    
-    // Make a simple request to check if API is working
-    const response = await axiosWithTimeout.get('https://www.bungie.net/Platform/Settings/', {
-      headers: {
-        'X-API-Key': BUNGIE_API_KEY
-      }
-    });
-    
-    if (response.status === 200 && response.data && response.data.ErrorCode === 1) {
-      systemState.bungieApiHealthy = true;
-      systemState.lastCheckedBungie = now;
-      
-      // Remove from degraded services list if it was there
-      const index = systemState.degradedServices.indexOf('bungie-api');
-      if (index !== -1) {
-        systemState.degradedServices.splice(index, 1);
-      }
-    } else {
-      systemState.bungieApiHealthy = false;
-      if (!systemState.degradedServices.includes('bungie-api')) {
-        systemState.degradedServices.push('bungie-api');
-      }
-      console.warn('Bungie API returned unexpected response:', response.status, response.data?.ErrorCode);
-    }
-  } catch (error) {
-    systemState.bungieApiHealthy = false;
-    if (!systemState.degradedServices.includes('bungie-api')) {
-      systemState.degradedServices.push('bungie-api');
-    }
-    console.error('Bungie API health check failed:', error.message);
-  } finally {
-    // Release mutex
-    healthCheckMutex.bungie = false;
-  }
-}
-
-// Add token refresh capability to email-verify endpoint
+// Add token refresh capability to email-verify endpoint with rate limiting
 app.get('/refresh-token', (req, res) => {
   const { nickname, submissionId } = req.query;
   
+  // Rate limiting specific to token refresh
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  const endpoint = req.path;
+  
+  // Stricter rate limiting for token generation
+  const refreshRateKey = `refresh:${clientIp}`;
+  if (!verificationAttempts.has(refreshRateKey)) {
+    verificationAttempts.set(refreshRateKey, { count: 1, timestamp: Date.now() });
+  } else {
+    const attempt = verificationAttempts.get(refreshRateKey);
+    const now = Date.now();
+    
+    // Only allow 5 refresh attempts per hour
+    if (now - attempt.timestamp > 60 * 60 * 1000) {
+      verificationAttempts.set(refreshRateKey, { count: 1, timestamp: now });
+    } else if (attempt.count > 5) {
+      req.log.warn('Token refresh rate limit exceeded', { clientIp });
+      
+      return renderVerificationError(
+        res, 
+        'Too Many Refresh Attempts', 
+        'You have requested too many token refreshes. Please wait one hour and try again.',
+        'For security reasons, we limit the number of token refreshes to prevent abuse.'
+      );
+    } else {
+      attempt.count++;
+      verificationAttempts.set(refreshRateKey, attempt);
+    }
+  }
+  
+  // Input validation with max length check
   if (!nickname || !submissionId) {
     return renderVerificationError(
       res, 
@@ -1985,10 +2117,26 @@ app.get('/refresh-token', (req, res) => {
     );
   }
   
+  // Check input length to prevent DoS
+  if (nickname.length > 100 || submissionId.length > 100) {
+    req.log.warn('Token refresh attempt with oversized inputs', { 
+      nicknameLength: nickname.length, 
+      submissionIdLength: submissionId.length
+    });
+    
+    return renderVerificationError(
+      res, 
+      'Invalid Input', 
+      'The provided nickname or submission ID is too long.'
+    );
+  }
+  
   try {
     // Generate new token with current timestamp
     const newToken = generateVerificationToken(nickname, submissionId);
     const verificationUrl = `${req.protocol}://${req.get('host')}/email-verify?nickname=${encodeURIComponent(nickname)}&submissionId=${encodeURIComponent(submissionId)}&token=${encodeURIComponent(newToken)}`;
+    
+    req.log.info('Generated new verification token', { nickname, submissionId });
     
     return res.send(`
       <html>

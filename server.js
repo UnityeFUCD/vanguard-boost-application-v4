@@ -12,16 +12,52 @@ const PORT = process.env.PORT || 3195;
 // Secret key for token generation - would typically be in environment variables
 const SECRET_KEY = process.env.TOKEN_SECRET || 'vanguard-boost-verification-secret';
 
-// Function to generate a verification token
-function generateVerificationToken(nickname, submissionId) {
-  const data = `${nickname}:${submissionId}:${SECRET_KEY}`;
-  return crypto.createHash('sha256').update(data).digest('hex');
+// Track verification attempts (would use Redis in production)
+const verificationAttempts = new Map();
+
+// Function to generate a verification token with timestamp for expiry
+function generateVerificationToken(nickname, submissionId, timestamp = Date.now()) {
+  // Normalize inputs for consistency
+  const normalizedNickname = String(nickname).trim();
+  const normalizedSubmissionId = String(submissionId).trim();
+  
+  const data = `${normalizedNickname}:${normalizedSubmissionId}:${timestamp}:${SECRET_KEY}`;
+  return `${crypto.createHash('sha256').update(data).digest('hex')}.${timestamp}`;
 }
 
 // Function to validate a verification token
 function validateVerificationToken(nickname, submissionId, token) {
-  const expectedToken = generateVerificationToken(nickname, submissionId);
-  return token === expectedToken;
+  try {
+    // Handle old tokens without timestamp
+    if (!token.includes('.')) {
+      // Legacy validation for older tokens
+      const data = `${nickname}:${submissionId}:${SECRET_KEY}`;
+      const expectedToken = crypto.createHash('sha256').update(data).digest('hex');
+      return token === expectedToken;
+    }
+    
+    // New token format with timestamp
+    const [hash, timestamp] = token.split('.');
+    
+    // Optional: Check if token is expired (e.g., 48 hours)
+    const now = Date.now();
+    if (now - parseInt(timestamp) > 48 * 60 * 60 * 1000) {
+      console.log('Token expired');
+      return false;
+    }
+    
+    // Normalize inputs the same way as when generating
+    const normalizedNickname = String(nickname).trim();
+    const normalizedSubmissionId = String(submissionId).trim();
+    
+    const data = `${normalizedNickname}:${normalizedSubmissionId}:${timestamp}:${SECRET_KEY}`;
+    const expectedHash = crypto.createHash('sha256').update(data).digest('hex');
+    
+    return hash === expectedHash;
+  } catch (err) {
+    console.error('Token validation error:', err);
+    return false;
+  }
 }
 
 // Middleware to parse JSON and form data
@@ -105,6 +141,47 @@ app.post('/submit-form', (req, res) => {
 app.get('/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
 
+  // Rate limiting - prevent abuse
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  const ipKey = `ip:${clientIp}`;
+  
+  // Basic rate limiting (would use Redis in production)
+  if (!verificationAttempts.has(ipKey)) {
+    verificationAttempts.set(ipKey, { count: 1, timestamp: Date.now() });
+  } else {
+    const attempt = verificationAttempts.get(ipKey);
+    const now = Date.now();
+    
+    // Reset counter after 1 hour
+    if (now - attempt.timestamp > 60 * 60 * 1000) {
+      verificationAttempts.set(ipKey, { count: 1, timestamp: now });
+    } else if (attempt.count > 10) {
+      // Too many attempts
+      console.warn(`Rate limit exceeded for IP: ${clientIp}`);
+      return res.status(429).send(`
+        <html>
+          <head>
+            <title>Too Many Attempts</title>
+            <style>
+              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+              h1 { color: #ff3e3e; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Too Many Verification Attempts</h1>
+              <p>Please wait a while before trying again.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    } else {
+      attempt.count++;
+      verificationAttempts.set(ipKey, attempt);
+    }
+  }
+
   // Handle OAuth errors from Bungie
   if (error) {
     console.error(`OAuth error: ${error} - ${error_description}`);
@@ -122,7 +199,7 @@ app.get('/callback', async (req, res) => {
           <div class="container">
             <h1>Verification Error</h1>
             <p>${error_description || error}</p>
-            <p>Please try again.</p>
+            <p>Please try again or contact support if the issue persists.</p>
           </div>
         </body>
       </html>
@@ -140,32 +217,49 @@ app.get('/callback', async (req, res) => {
   let submissionId = '';
   
   try {
-    // Try to parse state as a JSON object
     const decodedState = decodeURIComponent(state);
-    if (decodedState.startsWith('{') && decodedState.includes('"nickname"')) {
-      try {
-        // It's a JSON object
-        const stateData = JSON.parse(decodedState);
-        userNickname = stateData.nickname || '';
-        applicationId = stateData.applicationId || '';
-        submissionId = stateData.submissionId || '';
-        console.log(`Parsed from JSON - Nickname: ${userNickname}, ApplicationId: ${applicationId}, SubmissionId: ${submissionId}`);
-      } catch (jsonError) {
-        console.error('Error parsing JSON state:', jsonError);
-        userNickname = decodedState;
-      }
-    } else {
-      // It's just a simple string (old format)
-      userNickname = decodedState;
-      console.log(`Using direct format - Nickname: ${userNickname}`);
-    }
-  } catch (e) {
-    // Fallback for any decoding errors
+    let stateData = {};
+    
     try {
-      userNickname = state; // Use raw state as fallback
-      console.log(`Using raw state: ${userNickname}`);
-    } catch (decodeErr) {
-      console.error('Failed to decode state parameter:', decodeErr);
+      stateData = JSON.parse(decodedState);
+    } catch (parseError) {
+      console.error("Failed to parse state as JSON:", parseError);
+      // Try to extract information from state if it's not valid JSON
+      const stateMatch = decodedState.match(/nickname[:="']+(.*?)["'&]+/i);
+      if (stateMatch) userNickname = stateMatch[1];
+      
+      const submissionMatch = decodedState.match(/submissionId[:="']+(.*?)["'&]+/i);
+      if (submissionMatch) submissionId = submissionMatch[1];
+      
+      const appIdMatch = decodedState.match(/applicationId[:="']+(.*?)["'&]+/i);
+      if (appIdMatch) applicationId = appIdMatch[1];
+    }
+    
+    if (stateData.nickname) userNickname = stateData.nickname;
+    if (stateData.applicationId) applicationId = stateData.applicationId;
+    if (stateData.submissionId) submissionId = stateData.submissionId;
+    
+    console.log("Extracted from state - Nickname:", userNickname);
+    console.log("Extracted from state - Application ID:", applicationId);
+    console.log("Extracted from state - Submission ID:", submissionId);
+  } catch (error) {
+    console.error("Error decoding state parameter:", error);
+    return res.status(400).send("Invalid state parameter.");
+  }
+  
+  // If no submissionId, try to get from applicationId
+  if (!submissionId && applicationId && table) {
+    try {
+      const records = await table.select({
+        filterByFormula: `{applicationId} = '${applicationId}'`
+      }).firstPage();
+      
+      if (records.length > 0) {
+        submissionId = records[0].id;
+        console.log("Found submissionId from applicationId:", submissionId);
+      }
+    } catch (error) {
+      console.error("Error looking up submissionId from applicationId:", error);
     }
   }
   
@@ -303,71 +397,61 @@ app.get('/callback', async (req, res) => {
 
       // Update Airtable record (if found)
       if (table) {
+        let recordsToUpdate = [];
+        
         try {
-          let records = [];
-          
-          // First try to find a record by submissionId (most reliable)
+          // First try to look up by submissionId (most reliable)
           if (submissionId) {
-            records = await table.select({
-              filterByFormula: `{submissionId} = '${submissionId}'`
-            }).firstPage();
-            
-            if (records.length > 0) {
-              console.log('Found record by submissionId');
+            const recordById = await table.find(submissionId).catch(e => null);
+            if (recordById) {
+              recordsToUpdate.push(recordById);
             }
           }
           
-          // Next try applicationId
-          if (records.length === 0 && applicationId) {
-            records = await table.select({
+          // If no record found by submissionId, try applicationId
+          if (recordsToUpdate.length === 0 && applicationId) {
+            const recordsByAppId = await table.select({
               filterByFormula: `{applicationId} = '${applicationId}'`
             }).firstPage();
             
-            if (records.length > 0) {
-              console.log('Found record by applicationId');
+            if (recordsByAppId.length > 0) {
+              recordsToUpdate = recordsByAppId;
             }
           }
           
-          // If no records found, try nickname as fallback
-          if (records.length === 0) {
-            records = await table.select({
-              filterByFormula: `OR({nickname} = '${userNickname}', {bungieID} = '${normalizedUserNickname}')`
+          // Last resort: try to find by nickname
+          if (recordsToUpdate.length === 0) {
+            const normalizedNickname = userNickname.toLowerCase().trim();
+            const recordsByName = await table.select({
+              filterByFormula: `LOWER({nickname}) = '${normalizedNickname}'`
             }).firstPage();
             
-            if (records.length > 0) {
-              console.log('Found record by nickname');
+            if (recordsByName.length > 0) {
+              recordsToUpdate = recordsByName;
             }
           }
-
-          if (records.length > 0) {
-            await table.update(records[0].id, {
+          
+          // Update all matching records (should usually be just one)
+          for (const record of recordsToUpdate) {
+            await table.update(record.id, {
               verified: true,
+              verificationDate: new Date().toISOString(),
               bungieUsername: fullBungieName,
-              verificationDate: new Date().toISOString()
+              verificationMethod: 'bungie'
             });
-            console.log('Airtable record updated successfully.');
-          } else {
-            console.warn('No matching Airtable record found for submissionId, applicationId, or nickname:', submissionId, applicationId, userNickname);
-            // Try one more time with a substring search
-            try {
-              const fuzzyRecords = await table.select({
-                filterByFormula: `OR(SEARCH('${normalizedUserNickname}', LOWER({nickname})), SEARCH('${normalizedUserNickname}', LOWER({bungieID})))`
-              }).firstPage();
-              
-              if (fuzzyRecords.length > 0) {
-                await table.update(fuzzyRecords[0].id, {
-                  verified: true,
-                  bungieUsername: fullBungieName,
-                  verificationDate: new Date().toISOString()
-                });
-                console.log('Airtable record updated via fuzzy match.');
-              }
-            } catch (fuzzyError) {
-              console.error('Error with fuzzy search:', fuzzyError);
-            }
+            
+            // Store in memory verification status (temporary, would use Redis/DB in production)
+            verificationAttempts.set(`verified:${record.id}`, {
+              verified: true,
+              timestamp: Date.now(),
+              method: 'bungie',
+              bungieName: fullBungieName
+            });
+            
+            console.log(`Updated Airtable record: ${record.id}`);
           }
-        } catch (atError) {
-          console.error('Error updating Airtable:', atError);
+        } catch (error) {
+          console.error('Error updating Airtable record:', error);
         }
       }
 
@@ -379,10 +463,12 @@ app.get('/callback', async (req, res) => {
               body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
               .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
               h1 { color: #c4ff00; }
+              .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
             </style>
           </head>
           <body>
             <div class="container">
+              <div class="success-icon">✓</div>
               <h1>Verification Successful!</h1>
               <p>Your Bungie account (<strong>${fullBungieName}</strong>) has been verified.</p>
               <p>You may now close this window and return to Discord.</p>
@@ -465,6 +551,47 @@ app.get('/success', (req, res) => {
 app.get('/email-verify', async (req, res) => {
   const { nickname, submissionId, token } = req.query;
   
+  // Rate limiting
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  const ipKey = `ip:${clientIp}`;
+  
+  // Basic rate limiting
+  if (!verificationAttempts.has(ipKey)) {
+    verificationAttempts.set(ipKey, { count: 1, timestamp: Date.now() });
+  } else {
+    const attempt = verificationAttempts.get(ipKey);
+    const now = Date.now();
+    
+    // Reset counter after 1 hour
+    if (now - attempt.timestamp > 60 * 60 * 1000) {
+      verificationAttempts.set(ipKey, { count: 1, timestamp: now });
+    } else if (attempt.count > 10) {
+      // Too many attempts
+      console.warn(`Rate limit exceeded for IP: ${clientIp}`);
+      return res.status(429).send(`
+        <html>
+          <head>
+            <title>Too Many Attempts</title>
+            <style>
+              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+              h1 { color: #ff3e3e; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Too Many Verification Attempts</h1>
+              <p>Please wait a while before trying again.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    } else {
+      attempt.count++;
+      verificationAttempts.set(ipKey, attempt);
+    }
+  }
+  
   if (!nickname || !submissionId || !token) {
     return res.status(400).send(`
       <html>
@@ -480,15 +607,132 @@ app.get('/email-verify', async (req, res) => {
           <div class="container">
             <h1>Verification Error</h1>
             <p>Missing required verification parameters.</p>
-            <p>Please use the link provided in your email.</p>
+            <p>Please use the link provided in your email or contact support.</p>
           </div>
         </body>
       </html>
     `);
   }
   
+  // Check if already verified (in memory cache)
+  const verificationKey = `verified:${submissionId}`;
+  if (verificationAttempts.has(verificationKey)) {
+    const verification = verificationAttempts.get(verificationKey);
+    if (verification.verified) {
+      return res.send(`
+        <html>
+          <head>
+            <title>Already Verified</title>
+            <style>
+              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+              h1 { color: #c4ff00; }
+              .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="success-icon">✓</div>
+              <h1>Already Verified</h1>
+              <p>Your Bungie identity <strong>(${verification.bungieName || nickname})</strong> has already been verified successfully.</p>
+              <p>No further action is needed. Your application is being reviewed by our team.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+  }
+  
   // Validate the token
   if (!validateVerificationToken(nickname, submissionId, token)) {
+    console.warn('Invalid token:', token);
+    
+    // Try to help the user by checking Airtable
+    if (table) {
+      try {
+        // Try to find the record
+        let recordFound = null;
+        if (submissionId) {
+          try {
+            recordFound = await table.find(submissionId).catch(e => null);
+          } catch (e) {
+            // Likely not a valid record ID format, continue with other lookup methods
+          }
+        }
+        
+        // If not found by ID, try by nickname
+        if (!recordFound) {
+          const normalizedNickname = String(nickname).toLowerCase().trim();
+          const records = await table.select({
+            filterByFormula: `LOWER({nickname}) = '${normalizedNickname}'`
+          }).firstPage();
+          
+          if (records.length > 0) {
+            recordFound = records[0];
+          }
+        }
+        
+        if (recordFound) {
+          // Check if already verified
+          if (recordFound.get('verified') === true) {
+            // Already verified - show success message
+            return res.send(`
+              <html>
+                <head>
+                  <title>Already Verified</title>
+                  <style>
+                    body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                    .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                    h1 { color: #c4ff00; }
+                    .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
+                  </style>
+                </head>
+                <body>
+                  <div class="container">
+                    <div class="success-icon">✓</div>
+                    <h1>Already Verified</h1>
+                    <p>Your Bungie identity <strong>(${recordFound.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
+                    <p>No further action is needed. Your application is being reviewed by our team.</p>
+                  </div>
+                </body>
+              </html>
+            `);
+          }
+          
+          // Record exists but needs verification - generate new token and provide link
+          const recordId = recordFound.id;
+          const storedNickname = recordFound.get('nickname');
+          const newToken = generateVerificationToken(storedNickname, recordId);
+          
+          return res.status(403).send(`
+            <html>
+              <head>
+                <title>Verification Token Error</title>
+                <style>
+                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                  h1 { color: #ff3e3e; }
+                  .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; font-weight: bold; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <h1>Verification Token Error</h1>
+                  <p>The verification link you used appears to be invalid or expired.</p>
+                  <p>We found your application, but the security token doesn't match.</p>
+                  <p>Please use the updated link below:</p>
+                  <a href="/email-verify?nickname=${encodeURIComponent(storedNickname)}&submissionId=${encodeURIComponent(recordId)}&token=${encodeURIComponent(newToken)}" class="btn">USE UPDATED VERIFICATION LINK</a>
+                </div>
+              </body>
+            </html>
+          `);
+        }
+      } catch (error) {
+        console.error('Error checking verification in Airtable:', error);
+      }
+    }
+    
+    // If we get here, no record found or other error - show generic error
     return res.status(403).send(`
       <html>
         <head>
@@ -510,17 +754,34 @@ app.get('/email-verify', async (req, res) => {
     `);
   }
   
-  // Check if this submission is already verified
+  // Final check with Airtable (token is valid at this point)
   if (table) {
     try {
-      const records = await table.select({
-        filterByFormula: `{submissionId} = '${submissionId}'`
-      }).firstPage();
+      let recordFound = null;
       
-      if (records.length > 0) {
-        const record = records[0];
+      // Try to find by submissionId first (direct lookup)
+      if (submissionId) {
+        try {
+          recordFound = await table.find(submissionId).catch(e => null);
+        } catch (e) {
+          // Not a valid record ID format, continue with query
+        }
+      }
+      
+      // If not found directly, try query
+      if (!recordFound) {
+        const records = await table.select({
+          filterByFormula: `OR({submissionId} = '${submissionId}', LOWER({nickname}) = '${String(nickname).toLowerCase().trim()}')`
+        }).firstPage();
         
-        if (record.get('verified') === true) {
+        if (records.length > 0) {
+          recordFound = records[0];
+        }
+      }
+      
+      if (recordFound) {
+        // If already verified, show success message
+        if (recordFound.get('verified') === true) {
           return res.send(`
             <html>
               <head>
@@ -529,64 +790,64 @@ app.get('/email-verify', async (req, res) => {
                   body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                   h1 { color: #c4ff00; }
-                  .success-icon { font-size: 48px; margin-bottom: 20px; color: #c4ff00; }
+                  .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
                 </style>
               </head>
               <body>
                 <div class="container">
                   <div class="success-icon">✓</div>
                   <h1>Already Verified</h1>
-                  <p>Your Bungie identity <strong>(${record.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
+                  <p>Your Bungie identity <strong>(${recordFound.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
                   <p>No further action is needed. Your application is being reviewed by our team.</p>
                 </div>
               </body>
             </html>
           `);
-        } else {
-          // If no record found with this submissionId
-          return res.send(`
-            <html>
-              <head>
-                <title>Verification Error</title>
-                <style>
-                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                  h1 { color: #ff3e3e; }
-                  .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
-                </style>
-              </head>
-              <body>
-                <div class="container">
-                  <h1>Verification Error</h1>
-                  <p>We couldn't find your application record with ID: <strong>${submissionId}</strong></p>
-                  <div class="suggestion">
-                    <p><strong>Possible Solutions:</strong></p>
-                    <ul style="text-align: left;">
-                      <li>Ensure you've submitted your application first</li>
-                      <li>The link may be using an incorrect submission ID</li>
-                      <li>Contact support if you've already applied</li>
-                    </ul>
-                  </div>
-                </div>
-              </body>
-            </html>
-          `);
         }
-      } catch (error) {
-        console.error('Error checking verification status:', error);
+      } else {
+        // No record found with this submissionId, but token is valid - strange case
+        return res.send(`
+          <html>
+            <head>
+              <title>Verification Error</title>
+              <style>
+                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                h1 { color: #ff3e3e; }
+                .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <h1>Verification Error</h1>
+                <p>We couldn't find your application record with ID: <strong>${submissionId}</strong></p>
+                <div class="suggestion">
+                  <p><strong>Possible Solutions:</strong></p>
+                  <ul style="text-align: left;">
+                    <li>Your token is valid but we can't find your record - try submitting your application again</li>
+                    <li>The database might be experiencing issues - try again later</li>
+                    <li>Contact support if you continue having problems</li>
+                  </ul>
+                </div>
+              </div>
+            </body>
+          </html>
+        `);
       }
+    } catch (error) {
+      console.error('Error checking verification status:', error);
     }
-    
-    // If we got here, the user needs to verify - redirect to Bungie OAuth
-    const state = encodeURIComponent(JSON.stringify({
-      nickname,
-      submissionId
-    }));
-    
-    const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
-    
-    res.redirect(authUrl);
   }
+  
+  // If we got here, the user needs to verify - redirect to Bungie OAuth
+  const state = encodeURIComponent(JSON.stringify({
+    nickname,
+    submissionId
+  }));
+  
+  const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
+  
+  res.redirect(authUrl);
 });
 
 // Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work

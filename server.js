@@ -704,275 +704,125 @@ app.get('/success', (req, res) => {
   res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.query.applicationId || ''));
 });
 
-// Email verification endpoint
+// Email verification route with improved error handling
 app.get('/email-verify', async (req, res) => {
   const { nickname, submissionId, token } = req.query;
   
-  // First, immediately show a loading screen while we process
+  // Show initial loading screen
   res.write(`
     <html>
       <head>
-        <title>Verifying Your Identity</title>
+        <title>Verification In Progress</title>
         <style>
           body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-          .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+          .loader-container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
           h1 { color: #c4ff00; }
-          .loader { 
-            border: 5px solid rgba(0,0,0,0.3);
-            border-top: 5px solid #c4ff00;
-            border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-          }
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
+          .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-radius: 50%; border-top: 4px solid #c4ff00; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+          @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+          .message { margin: 20px 0; font-size: 18px; }
         </style>
         <script>
-          // This prevents the "loading" page from being stored in browser history
-          window.history.replaceState(null, document.title, window.location.href);
+          // This will let us update the UI with verification progress
+          function updateStatus(status) {
+            document.getElementById('status-message').innerText = status;
+          }
         </script>
       </head>
       <body>
-        <div class="container">
+        <div class="loader-container">
           <h1>Verifying Your Identity</h1>
-          <div class="loader"></div>
-          <p>Please wait while we verify your Bungie identity...</p>
+          <div class="spinner"></div>
+          <div id="status-message" class="message">Please wait while we verify your information...</div>
         </div>
       </body>
     </html>
   `);
-
-  // Process verification after showing loading screen
+  res.flushHeaders();
+  
   try {
-    // Rate limiting
-    const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-    const ipKey = `ip:${clientIp}`;
-    
-    // Basic rate limiting
-    if (!verificationAttempts.has(ipKey)) {
-      verificationAttempts.set(ipKey, { count: 1, timestamp: Date.now() });
-    } else {
-      const attempt = verificationAttempts.get(ipKey);
-      const now = Date.now();
-      
-      // Reset counter after 1 hour
-      if (now - attempt.timestamp > 60 * 60 * 1000) {
-        verificationAttempts.set(ipKey, { count: 1, timestamp: now });
-      } else if (attempt.count > 10) {
-        // Too many attempts
-        console.warn(`Rate limit exceeded for IP: ${clientIp}`);
-        return finishResponse(res, `
-          <html>
-            <head>
-              <title>Too Many Attempts</title>
-              <style>
-                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                h1 { color: #ff3e3e; }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <h1>Too Many Verification Attempts</h1>
-                <p>Please wait a while before trying again.</p>
-              </div>
-            </body>
-          </html>
-        `);
-      } else {
-        attempt.count++;
-        verificationAttempts.set(ipKey, attempt);
-      }
-    }
-    
+    // Input validation
     if (!nickname || !submissionId || !token) {
-      return finishResponse(res, `
-        <html>
-          <head>
-            <title>Verification Error</title>
-            <style>
-              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-              h1 { color: #ff3e3e; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <h1>Verification Error</h1>
-              <p>Missing required verification parameters.</p>
-              <p>Please use the link provided in your email or contact support.</p>
-            </div>
-          </body>
-        </html>
-      `);
-    }
-    
-    // Check if already verified (in memory cache)
-    const verificationKey = `verified:${submissionId}`;
-    if (verificationAttempts.has(verificationKey)) {
-      const verification = verificationAttempts.get(verificationKey);
-      if (verification.verified) {
-        return finishResponse(res, `
-          <html>
-            <head>
-              <title>Already Verified</title>
-              <style>
-                body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                h1 { color: #c4ff00; }
-                .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <div class="success-icon">✓</div>
-                <h1>Already Verified</h1>
-                <p>Your Bungie identity <strong>(${verification.bungieName || nickname})</strong> has already been verified successfully.</p>
-                <p>No further action is needed. Your application is being reviewed by our team.</p>
-              </div>
-            </body>
-          </html>
-        `);
-      }
-    }
-    
-    // Validate the token
-    if (!validateVerificationToken(nickname, submissionId, token)) {
-      console.warn('Invalid token:', token);
+      const missingParams = [];
+      if (!nickname) missingParams.push('nickname');
+      if (!submissionId) missingParams.push('submissionId');
+      if (!token) missingParams.push('token');
       
-      // Try to help the user - STRICT: Only lookup by submissionId
-      if (table && submissionId) {
-        try {
-          // Try to find the record ONLY by submissionId - no nickname lookups for security
-          let recordFound = null;
-          try {
-            recordFound = await table.find(submissionId).catch(e => null);
-          } catch (e) {
-            // Not a valid record ID format
-            console.warn('Invalid submission ID format:', submissionId);
-          }
-          
-          if (recordFound) {
-            // Check if already verified
-            if (recordFound.get('verified') === true) {
-              // Already verified - show success message
-              return finishResponse(res, `
-                <html>
-                  <head>
-                    <title>Already Verified</title>
-                    <style>
-                      body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                      .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                      h1 { color: #c4ff00; }
-                      .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
-                    </style>
-                  </head>
-                  <body>
-                    <div class="container">
-                      <div class="success-icon">✓</div>
-                      <h1>Already Verified</h1>
-                      <p>Your Bungie identity <strong>(${recordFound.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
-                      <p>No further action is needed. Your application is being reviewed by our team.</p>
-                    </div>
-                  </body>
-                </html>
-              `);
-            }
-            
-            // Record exists but needs verification - generate new token and provide link
-            const recordId = recordFound.id;
-            const storedNickname = recordFound.get('nickname');
-            const newToken = generateVerificationToken(storedNickname, recordId);
-            
-            return finishResponse(res, `
-              <html>
-                <head>
-                  <title>Verification Token Error</title>
-                  <style>
-                    body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-                    .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                    h1 { color: #ff3e3e; }
-                    .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; font-weight: bold; }
-                  </style>
-                </head>
-                <body>
-                  <div class="container">
-                    <h1>Verification Token Error</h1>
-                    <p>The verification link you used appears to be invalid or expired.</p>
-                    <p>We found your application, but the security token doesn't match.</p>
-                    <p>Please use the updated link below:</p>
-                    <a href="/email-verify?nickname=${encodeURIComponent(storedNickname)}&submissionId=${encodeURIComponent(recordId)}&token=${encodeURIComponent(newToken)}" class="btn">USE UPDATED VERIFICATION LINK</a>
-                  </div>
-                </body>
-              </html>
-            `);
-          }
-        } catch (error) {
-          console.error('Error checking verification in Airtable:', error);
-        }
-      }
-      
-      // If we get here, no record found or other error - show generic error
-      return finishResponse(res, `
-        <html>
-          <head>
-            <title>Verification Error</title>
-            <style>
-              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-              h1 { color: #ff3e3e; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <h1>Verification Error</h1>
-              <p>Invalid verification token.</p>
-              <p>Please use the link provided in your email or contact support.</p>
-            </div>
-          </body>
-        </html>
-      `);
-    }
-    
-    // Final check with Airtable (token is valid at this point) - STRICT: Only lookup by submissionId
-    if (table && submissionId) {
-      try {
-        let recordFound = null;
-        
-        // Try to find by submissionId only - direct lookup
-        try {
-          recordFound = await table.find(submissionId).catch(e => null);
-        } catch (e) {
-          // Not a valid record ID format - handle this case explicitly
-          return finishResponse(res, `
+      return res.end(`
+        <script>
+          document.open();
+          document.write(\`
             <html>
               <head>
-                <title>Verification Error</title>
+                <title>Verification Failed</title>
                 <style>
                   body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                   h1 { color: #ff3e3e; }
+                  .error-icon { font-size: 64px; margin-bottom: 20px; color: #ff3e3e; }
                 </style>
               </head>
               <body>
                 <div class="container">
-                  <h1>Verification Error</h1>
-                  <p>Invalid submission ID format.</p>
-                  <p>Please use the exact link provided in your email.</p>
+                  <div class="error-icon">⚠️</div>
+                  <h1>Verification Failed</h1>
+                  <p>Missing required parameters: ${missingParams.join(', ')}</p>
+                  <p>Please ensure you use the exact link provided in your email.</p>
                 </div>
               </body>
             </html>
-          `);
-        }
+          \`);
+          document.close();
+        </script>
+      `);
+    }
+    
+    console.log(`Verifying via email link: ${nickname} (ID: ${submissionId})`);
+    
+    // Validate the token
+    const isValid = validateVerificationToken(nickname, submissionId, token);
+    if (!isValid) {
+      return res.end(`
+        <script>
+          document.open();
+          document.write(\`
+            <html>
+              <head>
+                <title>Invalid Verification Link</title>
+                <style>
+                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                  h1 { color: #ff3e3e; }
+                  .error-icon { font-size: 64px; margin-bottom: 20px; color: #ff3e3e; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <div class="error-icon">⚠️</div>
+                  <h1>Invalid Verification Link</h1>
+                  <p>The verification link is invalid or has expired.</p>
+                  <p>Please check your email for the correct link or contact support for assistance.</p>
+                </div>
+              </body>
+            </html>
+          \`);
+          document.close();
+        </script>
+      `);
+    }
+    
+    // Check if this record is already verified
+    const verificationKey = `verified:${submissionId}`;
+    if (verificationAttempts.has(verificationKey)) {
+      const verificationData = verificationAttempts.get(verificationKey);
+      
+      if (verificationData.verified) {
+        console.log(`Record ${submissionId} is already verified via ${verificationData.method}`);
+        trackVerificationSuccess();
         
-        if (recordFound) {
-          // If already verified, show success message
-          if (recordFound.get('verified') === true) {
-            return finishResponse(res, `
+        return res.end(`
+          <script>
+            document.open();
+            document.write(\`
               <html>
                 <head>
                   <title>Already Verified</title>
@@ -987,46 +837,87 @@ app.get('/email-verify', async (req, res) => {
                   <div class="container">
                     <div class="success-icon">✓</div>
                     <h1>Already Verified</h1>
-                    <p>Your Bungie identity <strong>(${recordFound.get('bungieUsername') || nickname})</strong> has already been verified successfully.</p>
-                    <p>No further action is needed. Your application is being reviewed by our team.</p>
+                    <p>Your identity has already been verified on ${new Date(verificationData.timestamp).toLocaleString()}.</p>
+                    <p>No further action is needed. You can now close this window.</p>
                   </div>
                 </body>
               </html>
-            `);
-          }
-        } else {
-          // No record found with this submissionId, but token is valid - show clear error
-          return finishResponse(res, `
+            \`);
+            document.close();
+          </script>
+        `);
+      }
+    }
+    
+    // Record verification - this uses our transaction-safe recordVerification function
+    const verificationResult = await recordVerification(submissionId, nickname, 'email');
+    
+    if (verificationResult) {
+      trackVerificationSuccess();
+      return res.end(`
+        <script>
+          document.open();
+          document.write(\`
             <html>
               <head>
-                <title>Verification Error</title>
+                <title>Verification Successful</title>
                 <style>
                   body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
                   .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-                  h1 { color: #ff3e3e; }
-                  .suggestion { background: rgba(196, 255, 0, 0.1); padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left; }
+                  h1 { color: #c4ff00; }
+                  .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
                 </style>
               </head>
               <body>
                 <div class="container">
-                  <h1>Verification Error</h1>
-                  <p>We couldn't find your application record with ID: <strong>${submissionId}</strong></p>
-                  <div class="suggestion">
-                    <p><strong>Possible Solutions:</strong></p>
-                    <ul style="text-align: left;">
-                      <li>Ensure you've submitted your application</li>
-                      <li>Try again later - sometimes database updates take a moment</li>
-                      <li>Contact support if you continue having problems</li>
-                    </ul>
-                  </div>
+                  <div class="success-icon">✓</div>
+                  <h1>Verification Successful</h1>
+                  <p>Your identity has been verified successfully.</p>
+                  <p>Thank you for completing this step of the application process.</p>
                 </div>
               </body>
             </html>
-          `);
-        }
-      } catch (error) {
-        console.error('Error checking verification status:', error);
-        return finishResponse(res, `
+          \`);
+          document.close();
+        </script>
+      `);
+    } else {
+      // Use our degraded service helper if the confirmation didn't go through
+      return res.end(`
+        <script>
+          document.open();
+          document.write(\`
+            <html>
+              <head>
+                <title>Verification Issue</title>
+                <style>
+                  body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+                  .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+                  h1 { color: #ff9d00; }
+                  .warning-icon { font-size: 64px; margin-bottom: 20px; color: #ff9d00; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <div class="warning-icon">⚠️</div>
+                  <h1>Verification Status Uncertain</h1>
+                  <p>We've received your verification request, but we're having trouble updating your record.</p>
+                  <p>This could be due to temporary database issues. Please check back later, or contact support if the problem persists.</p>
+                </div>
+              </body>
+            </html>
+          \`);
+          document.close();
+        </script>
+      `);
+    }
+  } catch (error) {
+    console.error('Error during email verification:', error);
+    
+    return res.end(`
+      <script>
+        document.open();
+        document.write(\`
           <html>
             <head>
               <title>Verification Error</title>
@@ -1034,79 +925,23 @@ app.get('/email-verify', async (req, res) => {
                 body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
                 .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
                 h1 { color: #ff3e3e; }
+                .error-icon { font-size: 64px; margin-bottom: 20px; color: #ff3e3e; }
               </style>
             </head>
             <body>
               <div class="container">
+                <div class="error-icon">⚠️</div>
                 <h1>Verification Error</h1>
-                <p>An error occurred while checking your verification status.</p>
-                <p>Please try again later or contact support.</p>
+                <p>An error occurred during verification. Please try again or contact support.</p>
+                <p>Error reference: ${Date.now()}</p>
               </div>
             </body>
           </html>
-        `);
-      }
-    }
-    
-    // If we got here, the token is valid but we need to redirect to Bungie OAuth for verification
-    const state = encodeURIComponent(JSON.stringify({
-      nickname,
-      submissionId
-    }));
-    
-    const authUrl = `https://www.bungie.net/en/OAuth/Authorize?client_id=${BUNGIE_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&state=${state}`;
-    
-    return finishResponse(res, null, authUrl);
-  } catch (error) {
-    console.error('Unexpected error in email verification:', error);
-    return finishResponse(res, `
-      <html>
-        <head>
-          <title>Verification Error</title>
-          <style>
-            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
-            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
-            h1 { color: #ff3e3e; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Verification Error</h1>
-            <p>An unexpected error occurred during verification.</p>
-            <p>Please try again later or contact support.</p>
-          </div>
-        </body>
-      </html>
-    `);
-  }
-});
-
-// Helper function to finish streaming response
-function finishResponse(res, html, redirectUrl = null) {
-  if (!res.headersSent) {
-    if (redirectUrl) {
-      return res.redirect(redirectUrl);
-    } else {
-      return res.send(html);
-    }
-  } else {
-    // For streaming responses where headers were already sent
-    res.write(`
-      <script>
-        document.open();
-        document.write(\`${html.replace(/`/g, '\\`')}\`);
+        \`);
         document.close();
-        ${redirectUrl ? `window.location.href = "${redirectUrl}";` : ''}
       </script>
     `);
-    return res.end();
   }
-}
-
-// Netlify form handling - this is a fallback in case the Netlify forms handling doesn't work
-app.post('/', (req, res) => {
-  console.log('Form submitted via POST to root:', req.body);
-  res.redirect('/thank-you.html?applicationId=' + encodeURIComponent(req.body.applicationId || ''));
 });
 
 // Development utility route to generate verification links (should be disabled in production)
@@ -1199,6 +1034,595 @@ setInterval(() => {
   
   console.log(`Cleaned up verification attempts map. Current size: ${verificationAttempts.size}`);
 }, CLEANUP_INTERVAL);
+
+// Add middleware for security headers
+app.use((req, res, next) => {
+  // Security headers
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Basic CSP - can be expanded based on requirements
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' https://www.bungie.net; style-src 'self' 'unsafe-inline';");
+  
+  // Redirect HTTP to HTTPS in production
+  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect(`https://${req.hostname}${req.url}`);
+  }
+  
+  next();
+});
+
+// Global application state
+let systemState = {
+  bungieApiHealthy: true,
+  airtableHealthy: !!table,
+  maintenanceMode: false,
+  degradedServices: [],
+  startTime: Date.now(),
+  lastCheckedBungie: null,
+  verificationSuccessRate: {
+    attempts: 0,
+    success: 0,
+    lastReset: Date.now()
+  }
+};
+
+// Advanced rate limiting with progressive backoff
+const rateLimiter = {
+  attempts: new Map(),
+  blacklist: new Set(),
+  
+  // Check if IP is rate limited
+  isLimited: function(ip, endpoint) {
+    if (this.blacklist.has(ip)) return true;
+    
+    const key = `${ip}:${endpoint}`;
+    if (!this.attempts.has(key)) return false;
+    
+    const data = this.attempts.get(key);
+    const now = Date.now();
+    
+    // Reset after cooldown period
+    if (now - data.firstAttempt > 3600000) { // 1 hour
+      this.attempts.delete(key);
+      return false;
+    }
+    
+    // Calculate allowed attempts based on time
+    const timeSinceFirstAttempt = now - data.firstAttempt;
+    const timeFactorHours = timeSinceFirstAttempt / 3600000; // Convert to hours
+    
+    // Base rate of 30/hour, decreasing based on number of attempts
+    const allowedAttempts = Math.max(5, Math.floor(30 - (data.count * 2 * timeFactorHours)));
+    
+    // Progressive backoff - require longer waits after more attempts
+    if (data.count > allowedAttempts) {
+      // Calculate wait time with progressive backoff
+      const waitTime = Math.min(30000, Math.pow(2, data.count - allowedAttempts) * 1000);
+      
+      if (now - data.lastAttempt < waitTime) {
+        return true;
+      }
+    }
+    
+    return false;
+  },
+  
+  // Record an attempt
+  recordAttempt: function(ip, endpoint) {
+    const key = `${ip}:${endpoint}`;
+    const now = Date.now();
+    
+    if (!this.attempts.has(key)) {
+      this.attempts.set(key, {
+        count: 1,
+        firstAttempt: now,
+        lastAttempt: now
+      });
+    } else {
+      const data = this.attempts.get(key);
+      data.count++;
+      data.lastAttempt = now;
+      this.attempts.set(key, data);
+      
+      // Auto-blacklist if too many attempts in short time
+      if (data.count > 100 && (now - data.firstAttempt) < 300000) { // 100 attempts in 5 minutes
+        console.warn(`IP ${ip} blacklisted for suspicious activity`);
+        this.blacklist.add(ip);
+        
+        // Auto-remove from blacklist after 24 hours
+        setTimeout(() => {
+          this.blacklist.delete(ip);
+        }, 24 * 60 * 60 * 1000);
+      }
+    }
+  },
+  
+  // Get wait time if limited
+  getWaitTime: function(ip, endpoint) {
+    const key = `${ip}:${endpoint}`;
+    if (!this.attempts.has(key)) return 0;
+    
+    const data = this.attempts.get(key);
+    const now = Date.now();
+    
+    // Calculate allowed attempts based on time
+    const timeSinceFirstAttempt = now - data.firstAttempt;
+    const timeFactorHours = timeSinceFirstAttempt / 3600000; // Convert to hours
+    const allowedAttempts = Math.max(5, Math.floor(30 - (data.count * 2 * timeFactorHours)));
+    
+    if (data.count <= allowedAttempts) return 0;
+    
+    // Calculate wait time with progressive backoff
+    const waitTime = Math.min(30000, Math.pow(2, data.count - allowedAttempts) * 1000);
+    const timeRemaining = Math.max(0, waitTime - (now - data.lastAttempt));
+    
+    return timeRemaining;
+  },
+  
+  // Clean up old attempts every hour
+  cleanup: function() {
+    const now = Date.now();
+    const hourAgo = now - 3600000;
+    
+    for (const [key, data] of this.attempts.entries()) {
+      if (data.lastAttempt < hourAgo) {
+        this.attempts.delete(key);
+      }
+    }
+    
+    // Schedule next cleanup
+    setTimeout(() => this.cleanup(), 3600000); // 1 hour
+  }
+};
+
+// Start the rate limiter cleanup
+rateLimiter.cleanup();
+
+// Check Bungie API health
+async function checkBungieApiHealth() {
+  if (!BUNGIE_API_KEY) {
+    console.log('Bungie API not configured - skipping health check');
+    systemState.bungieApiHealthy = false;
+    return;
+  }
+  
+  try {
+    // Set up API request timeout to prevent hanging
+    const axiosWithTimeout = axios.create({
+      timeout: 5000 // 5 second timeout for health check
+    });
+    
+    // Make a simple request to check if API is working
+    const response = await axiosWithTimeout.get('https://www.bungie.net/Platform/Settings/', {
+      headers: {
+        'X-API-Key': BUNGIE_API_KEY
+      }
+    });
+    
+    if (response.status === 200 && response.data && response.data.ErrorCode === 1) {
+      systemState.bungieApiHealthy = true;
+      systemState.lastCheckedBungie = Date.now();
+    } else {
+      systemState.bungieApiHealthy = false;
+      systemState.degradedServices.push('bungie-api');
+      console.warn('Bungie API returned unexpected response:', response.status, response.data?.ErrorCode);
+    }
+  } catch (error) {
+    systemState.bungieApiHealthy = false;
+    if (!systemState.degradedServices.includes('bungie-api')) {
+      systemState.degradedServices.push('bungie-api');
+    }
+    console.error('Bungie API health check failed:', error.message);
+  }
+}
+
+// Initial health checks
+checkBungieApiHealth();
+
+// Schedule regular Bungie API health checks
+setInterval(checkBungieApiHealth, 5 * 60 * 1000); // Every 5 minutes
+
+// Middleware for all verification endpoints
+function verificationMiddleware(req, res, next) {
+  const endpoint = req.path;
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  
+  // Check for maintenance mode
+  if (systemState.maintenanceMode && !req.path.includes('/admin/')) {
+    return res.status(503).send(`
+      <html>
+        <head>
+          <title>Maintenance</title>
+          <style>
+            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+            h1 { color: #ff9d00; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>System Maintenance</h1>
+            <p>The verification system is currently undergoing maintenance.</p>
+            <p>Please try again later. We apologize for the inconvenience.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+  
+  // Check for rate limiting
+  if (rateLimiter.isLimited(clientIp, endpoint)) {
+    const waitTime = rateLimiter.getWaitTime(clientIp, endpoint);
+    const waitSeconds = Math.ceil(waitTime / 1000);
+    
+    return res.status(429).send(`
+      <html>
+        <head>
+          <title>Too Many Requests</title>
+          <style>
+            body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+            .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+            h1 { color: #ff3e3e; }
+            .countdown { font-size: 30px; margin: 20px 0; color: #ff9d00; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Too Many Requests</h1>
+            <p>Please wait before trying again.</p>
+            <p class="countdown">${waitSeconds} seconds</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+  
+  // Record this attempt
+  rateLimiter.recordAttempt(clientIp, endpoint);
+  
+  // Check for degraded services
+  if (endpoint.includes('/verify') || endpoint.includes('/callback')) {
+    systemState.verificationSuccessRate.attempts++;
+    
+    // Check necessary services health
+    if (!systemState.bungieApiHealthy && endpoint.includes('/callback')) {
+      return res.status(503).send(`
+        <html>
+          <head>
+            <title>Service Unavailable</title>
+            <style>
+              body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+              .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+              h1 { color: #ff3e3e; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Verification Service Degraded</h1>
+              <p>The Bungie API is currently unavailable. This is likely a temporary issue.</p>
+              <p>Please try again in a few minutes. If the problem persists, please contact support.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+    
+    if (!systemState.airtableHealthy && table) {
+      console.warn('Airtable connection unhealthy, falling back to in-memory storage');
+      // Continue processing but with a warning - will use in-memory fallback
+    }
+  }
+  
+  next();
+}
+
+// Apply the verification middleware to relevant routes
+app.use(['/verify', '/email-verify', '/callback', '/generate-email-link'], verificationMiddleware);
+
+// Status/health endpoint for monitoring
+app.get('/health', (req, res) => {
+  // Only accessible from localhost or with admin token
+  const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  const isLocalhost = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp.includes('192.168.');
+  const hasAdminToken = req.query.token === process.env.ADMIN_TOKEN;
+  
+  if (!isLocalhost && !hasAdminToken) {
+    return res.status(403).send('Forbidden');
+  }
+  
+  // Calculate uptime
+  const uptime = Math.floor((Date.now() - systemState.startTime) / 1000);
+  const days = Math.floor(uptime / 86400);
+  const hours = Math.floor((uptime % 86400) / 3600);
+  const minutes = Math.floor((uptime % 3600) / 60);
+  
+  // Calculate verification success rate
+  const successRate = systemState.verificationSuccessRate.attempts > 0 
+    ? (systemState.verificationSuccessRate.success / systemState.verificationSuccessRate.attempts * 100).toFixed(2)
+    : 'N/A';
+  
+  // Return detailed health status
+  const health = {
+    status: systemState.degradedServices.length === 0 ? 'healthy' : 'degraded',
+    uptime: `${days}d ${hours}h ${minutes}m`,
+    bungieApi: systemState.bungieApiHealthy ? 'healthy' : 'unhealthy',
+    airtable: systemState.airtableHealthy ? 'healthy' : 'unhealthy',
+    degradedServices: systemState.degradedServices,
+    maintenanceMode: systemState.maintenanceMode,
+    verificationStats: {
+      attempts: systemState.verificationSuccessRate.attempts,
+      successful: systemState.verificationSuccessRate.success,
+      successRate: `${successRate}%`,
+      verificationAttemptsInMemory: verificationAttempts.size,
+      activeVerificationLocks: verificationLocks.size
+    },
+    rateLimiting: {
+      ipTracking: rateLimiter.attempts.size,
+      blacklistedIPs: rateLimiter.blacklist.size
+    }
+  };
+  
+  res.json(health);
+});
+
+// Helper function for improved user feedback on verification errors
+function renderVerificationError(res, title, message, details = null, retryLink = null) {
+  let detailsHtml = '';
+  if (details) {
+    detailsHtml = `
+      <div class="details">
+        ${details}
+      </div>
+    `;
+  }
+  
+  let retryHtml = '';
+  if (retryLink) {
+    retryHtml = `
+      <div class="retry">
+        <a href="${escapeHtml(retryLink)}" class="btn">Try Again</a>
+      </div>
+    `;
+  }
+  
+  return res.send(`
+    <html>
+      <head>
+        <title>${escapeHtml(title)}</title>
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+          .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+          h1 { color: #ff3e3e; }
+          .details { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 5px; margin: 20px 0; text-align: left; }
+          .error-icon { font-size: 64px; margin-bottom: 20px; color: #ff3e3e; }
+          .btn { display: inline-block; padding: 10px 20px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-top: 20px; }
+          code { background: rgba(0,0,0,0.3); padding: 2px 4px; border-radius: 3px; font-family: monospace; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="error-icon">⚠️</div>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(message)}</p>
+          ${detailsHtml}
+          ${retryHtml}
+        </div>
+      </body>
+    </html>
+  `);
+}
+
+// Helper function for rendering success responses
+function renderVerificationSuccess(res, title, message, additionalDetails = null) {
+  let detailsHtml = '';
+  if (additionalDetails) {
+    detailsHtml = `
+      <div class="details">
+        ${additionalDetails}
+      </div>
+    `;
+  }
+  
+  return res.send(`
+    <html>
+      <head>
+        <title>${escapeHtml(title)}</title>
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; text-align: center; padding: 50px 20px; }
+          .container { max-width: 600px; margin: auto; background: rgba(0,0,0,0.5); padding: 30px; border-radius: 8px; }
+          h1 { color: #c4ff00; }
+          .details { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 5px; margin: 20px 0; text-align: left; }
+          .success-icon { font-size: 64px; margin-bottom: 20px; color: #c4ff00; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="success-icon">✓</div>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(message)}</p>
+          ${detailsHtml}
+        </div>
+      </body>
+    </html>
+  `);
+}
+
+// Track verification success in the system state
+function trackVerificationSuccess() {
+  systemState.verificationSuccessRate.success++;
+  
+  // Reset counters daily
+  const now = Date.now();
+  if (now - systemState.verificationSuccessRate.lastReset > 24 * 60 * 60 * 1000) {
+    systemState.verificationSuccessRate.attempts = 1;
+    systemState.verificationSuccessRate.success = 1;
+    systemState.verificationSuccessRate.lastReset = now;
+  }
+}
+
+// Simple admin panel for system health and configuration
+app.get('/admin', (req, res) => {
+  // Only accessible with admin token
+  const hasAdminToken = req.query.token === process.env.ADMIN_TOKEN;
+  if (!hasAdminToken) {
+    return res.status(403).send('Forbidden - Admin token required');
+  }
+  
+  // Calculate uptime
+  const uptime = Math.floor((Date.now() - systemState.startTime) / 1000);
+  const days = Math.floor(uptime / 86400);
+  const hours = Math.floor((uptime % 86400) / 3600);
+  
+  // Success rate
+  const successRate = systemState.verificationSuccessRate.attempts > 0 
+    ? (systemState.verificationSuccessRate.success / systemState.verificationSuccessRate.attempts * 100).toFixed(1)
+    : 'N/A';
+  
+  // Format the admin panel HTML
+  res.send(`
+    <html>
+      <head>
+        <title>Verification System Admin</title>
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #101114; color: #fff; padding: 20px; }
+          h1, h2 { color: #c4ff00; }
+          .panel { background: rgba(0,0,0,0.5); padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+          .stat { display: flex; justify-content: space-between; margin: 10px 0; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; }
+          .stat-name { font-weight: bold; }
+          .healthy { color: #c4ff00; }
+          .degraded { color: #ff9d00; }
+          .unhealthy { color: #ff3e3e; }
+          .btn { display: inline-block; padding: 8px 16px; background-color: #c4ff00; color: #000; text-decoration: none; border-radius: 4px; margin-right: 10px; }
+          .danger { background-color: #ff3e3e; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>Verification System Administration</h1>
+        <div class="panel">
+          <h2>System Status</h2>
+          <div class="stat">
+            <span class="stat-name">Overall Status:</span>
+            <span class="${systemState.degradedServices.length === 0 ? 'healthy' : 'degraded'}">
+              ${systemState.degradedServices.length === 0 ? 'Healthy' : 'Degraded'}
+            </span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Uptime:</span>
+            <span>${days}d ${hours}h</span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Bungie API:</span>
+            <span class="${systemState.bungieApiHealthy ? 'healthy' : 'unhealthy'}">
+              ${systemState.bungieApiHealthy ? 'Healthy' : 'Unhealthy'}
+            </span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Airtable Connection:</span>
+            <span class="${systemState.airtableHealthy ? 'healthy' : 'unhealthy'}">
+              ${systemState.airtableHealthy ? 'Healthy' : 'Unhealthy'}
+            </span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Maintenance Mode:</span>
+            <span class="${systemState.maintenanceMode ? 'degraded' : 'healthy'}">
+              ${systemState.maintenanceMode ? 'Enabled' : 'Disabled'}
+            </span>
+          </div>
+        </div>
+        
+        <div class="panel">
+          <h2>Verification Statistics</h2>
+          <div class="stat">
+            <span class="stat-name">Verification Attempts:</span>
+            <span>${systemState.verificationSuccessRate.attempts}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Successful Verifications:</span>
+            <span>${systemState.verificationSuccessRate.success}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Success Rate:</span>
+            <span>${successRate}%</span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Active Memory Records:</span>
+            <span>${verificationAttempts.size}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Active Verification Locks:</span>
+            <span>${verificationLocks.size}</span>
+          </div>
+        </div>
+        
+        <div class="panel">
+          <h2>System Controls</h2>
+          <a href="/admin/toggle-maintenance?token=${encodeURIComponent(process.env.ADMIN_TOKEN)}" class="btn ${systemState.maintenanceMode ? 'danger' : ''}">
+            ${systemState.maintenanceMode ? 'Disable Maintenance Mode' : 'Enable Maintenance Mode'}
+          </a>
+          <a href="/admin/reset-stats?token=${encodeURIComponent(process.env.ADMIN_TOKEN)}" class="btn">
+            Reset Statistics
+          </a>
+          <a href="/admin/clear-rate-limits?token=${encodeURIComponent(process.env.ADMIN_TOKEN)}" class="btn">
+            Clear Rate Limits
+          </a>
+        </div>
+        
+        <div class="panel">
+          <h2>Rate Limiting</h2>
+          <div class="stat">
+            <span class="stat-name">IPs Being Tracked:</span>
+            <span>${rateLimiter.attempts.size}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-name">Blacklisted IPs:</span>
+            <span>${rateLimiter.blacklist.size}</span>
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// Admin controls endpoints
+app.get('/admin/toggle-maintenance', (req, res) => {
+  if (req.query.token !== process.env.ADMIN_TOKEN) {
+    return res.status(403).send('Forbidden');
+  }
+  
+  systemState.maintenanceMode = !systemState.maintenanceMode;
+  console.log(`Maintenance mode ${systemState.maintenanceMode ? 'enabled' : 'disabled'} by admin`);
+  
+  res.redirect(`/admin?token=${encodeURIComponent(process.env.ADMIN_TOKEN)}`);
+});
+
+app.get('/admin/reset-stats', (req, res) => {
+  if (req.query.token !== process.env.ADMIN_TOKEN) {
+    return res.status(403).send('Forbidden');
+  }
+  
+  systemState.verificationSuccessRate = {
+    attempts: 0,
+    success: 0,
+    lastReset: Date.now()
+  };
+  
+  console.log('Verification statistics reset by admin');
+  res.redirect(`/admin?token=${encodeURIComponent(process.env.ADMIN_TOKEN)}`);
+});
+
+app.get('/admin/clear-rate-limits', (req, res) => {
+  if (req.query.token !== process.env.ADMIN_TOKEN) {
+    return res.status(403).send('Forbidden');
+  }
+  
+  rateLimiter.attempts.clear();
+  rateLimiter.blacklist.clear();
+  
+  console.log('Rate limiting data cleared by admin');
+  res.redirect(`/admin?token=${encodeURIComponent(process.env.ADMIN_TOKEN)}`);
+});
 
 // Start the server
 app.listen(PORT, () => {
